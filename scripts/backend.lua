@@ -1,0 +1,578 @@
+
+-- Zone Planner backend module
+-- Persistence follows Factorio's storage table conventions.
+-- Types are annotated for linter assistance.
+
+local backend = {}
+
+--[[
+Persistent state layout (storage.zp)
+
+storage.zp :: ZP.StorageRoot = {
+  version: uint,                       -- schema/version marker for migrations
+  forces: table<uint, ZP.ForceState>,  -- by force_index
+  players: table<uint, ZP.PlayerState>,-- by player_index
+  undo_capacity: uint,                 -- max undo entries per player
+}
+]]
+
+---@class ZP.StorageRoot
+---@field version uint
+---@field forces table<uint, ZP.ForceState>
+---@field players table<uint, ZP.PlayerState>
+---@field undo_capacity uint
+
+---@class ZP.Zone
+---@field id uint
+---@field name string
+---@field color Color
+---@field order uint
+
+---@class ZP.Grid
+---@field width uint
+---@field height uint
+---@field x_offset int
+---@field y_offset int
+---@field opacity number
+
+---@class ZP.ForceState
+---@field next_zone_id uint
+---@field zones table<uint, ZP.Zone>
+---@field grid ZP.Grid
+---@field images table<uint, {cells: table<string, uint?>}>
+
+---@class ZP.PlayerState
+---@field selected_zone_id uint
+---@field selected_tool string|nil
+---@field undo table[]
+---@field redo table[]
+---@field boundary_opacity_index uint  -- 0..3 discrete setting for boundary visibility
+
+local EMPTY_ZONE_ID = 0
+local DEFAULT_GRID = {
+  width = 32,
+  height = 32,
+  x_offset = 0,
+  y_offset = 0,
+}
+
+-- Default discrete visibility index for boundaries (0=off, 1..3 = variant levels)
+local DEFAULT_OPACITY_INDEX = 1
+local UNDO_CAPACITY = 100
+
+DEFAULT_ZONES = {
+  { name = "Belts", color = {r=1,g=0.8,b=0} },
+  { name = "Production", color = {r=0.5,g=0.5,b=1.0} },
+  { name = "Trains", color = {r=0.3,g=0.9,b=0.3} },
+}
+
+local function ensure_storage()
+  if not storage.zp then
+    storage.zp = {
+      version = 1,
+      forces = {}, ---@type table<uint, ZP.ForceState>
+      players = {}, ---@type table<uint, ZP.PlayerState>
+      undo_capacity = UNDO_CAPACITY 
+    } ---@type ZP.StorageRoot
+  end
+end
+
+local function ensure_force(force_index)
+  ensure_storage()
+  local forces = storage.zp.forces
+  local f = forces[force_index]
+  if not f then
+    f = {
+      next_zone_id = 1, -- 0 reserved for Empty
+      zones = {
+        [EMPTY_ZONE_ID] = { id = EMPTY_ZONE_ID, name = "(Empty)", color = {r=0,g=0,b=0,a=0}, order = 0 },
+      },
+      grid = {
+        width = DEFAULT_GRID.width,
+        height = DEFAULT_GRID.height,
+        x_offset = DEFAULT_GRID.x_offset,
+        y_offset = DEFAULT_GRID.y_offset,
+        opacity = DEFAULT_GRID.opacity,
+      },
+      images = {},
+    }
+    forces[force_index] = f
+      for _, def in pairs(DEFAULT_ZONES) do
+      backend.add_zone(force_index, def.name, def.color)
+    end
+
+  end
+
+  return f
+end
+
+local function ensure_surface(force_index, surface_index)
+  local f = ensure_force(force_index)
+  local images = f.images
+  if not images[surface_index] then
+    images[surface_index] = { cells = {} }
+  end
+  return images[surface_index]
+end
+
+local function ensure_player(player_index)
+  ensure_storage()
+  local players = storage.zp.players
+  local p = players[player_index]
+  if not p then
+    local g = ensure_force(player_index and game.get_player(player_index) and game.get_player(player_index).force.index or 1).grid
+    p = {
+      selected_zone_id = EMPTY_ZONE_ID,
+      selected_tool = nil,
+      undo = {},
+      redo = {},
+      boundary_opacity_index = DEFAULT_OPACITY_INDEX,
+    }
+    players[player_index] = p
+  end
+  return p
+end
+
+---Update per-player boundary visibility index (0..3).
+---@param player_index uint
+---@param flags { boundary_opacity_index: uint|nil, index: uint|nil }
+function backend.set_player_visibility(player_index, flags)
+  local p = ensure_player(player_index)
+  local idx = flags and (flags.boundary_opacity_index or flags.index)
+  if idx ~= nil then
+    local n = math.floor(tonumber(idx) or 0)
+    if n < 0 then n = 0 end
+    if n > 3 then n = 3 end
+    p.boundary_opacity_index = n
+  end
+  -- notify renderer/UI to update per-player visibility
+  if render and render.on_player_visibility_changed then
+    pcall(render.on_player_visibility_changed, player_index)
+  end
+  if ui and ui.on_backend_changed then
+    pcall(ui.on_backend_changed, { kind = "player-visibility-changed", player_index = player_index })
+  end
+end
+
+---Expose the discrete boundary opacity index for the renderer.
+---@param player_index uint
+---@return uint
+function backend.get_boundary_opacity_index(player_index)
+  local p = ensure_player(player_index)
+  return p.boundary_opacity_index or 0
+end
+
+-- Reset helpers --------------------------------------------------------------
+---Reset backend state for a single force.
+---@param force_index uint
+---@param default_zones boolean|nil  -- if true, ensure_force will re-add defaults on next access
+function backend.reset_force(force_index, default_zones)
+  ensure_storage()
+  storage.zp.forces[force_index] = nil -- reset
+end
+
+---Reset all backend state (forces, players, undo capacity).
+function backend.reset_all()
+  storage.zp = nil
+end
+
+---Reset a single player state (undo/redo stacks, selections).
+---@param player_index uint
+function backend.reset_player(player_index)
+  ensure_storage()
+  storage.zp.players[player_index] = nil
+end
+
+---Reset a single surface image map for a force.
+---@param force_index uint
+---@param surface_index uint
+function backend.reset_surface(force_index, surface_index)
+  local f = ensure_force(force_index)
+  f.images[surface_index] = { cells = {} }
+end
+
+
+local function cell_key(cx, cy)
+  return tostring(cx) .. ":" .. tostring(cy)
+end
+
+local function parse_cell_key(key)
+  local sx, sy = key:match("^(-?%d+):(-?%d+)$")
+  return tonumber(sx), tonumber(sy)
+end
+
+-- Normalize any zone id to internal storage semantics (nil = Empty)
+---@param zone_id uint|nil
+---@return uint|nil
+local function normalize_zone_id(zone_id)
+  if zone_id == nil or zone_id == EMPTY_ZONE_ID then return nil end
+  return zone_id
+end
+
+-- Notifications --------------------------------------------------------------
+local function notify_cells_changed(force_index, surface_index, changed_set, new_zone_id)
+  if render and render.on_cells_changed then
+    pcall(render.on_cells_changed, force_index, surface_index, changed_set, new_zone_id)
+  end
+  if ui and ui.on_backend_changed then
+    pcall(ui.on_backend_changed, { kind = "cells-changed", force_index = force_index, surface_index = surface_index })
+  end
+end
+
+local function notify_zones_changed(force_index)
+  if render and render.on_zones_changed then
+    pcall(render.on_zones_changed, force_index)
+  end
+  if ui and ui.on_backend_changed then
+    pcall(ui.on_backend_changed, { kind = "zones-changed", force_index = force_index })
+  end
+end
+
+local function notify_grid_changed(force_index)
+  if render and render.on_grid_changed then
+    pcall(render.on_grid_changed, force_index)
+  end
+  if ui and ui.on_backend_changed then
+    pcall(ui.on_backend_changed, { kind = "grid-changed", force_index = force_index })
+  end
+end
+
+---@param force_index uint
+function backend.get_force(force_index)
+  return ensure_force(force_index)
+end
+
+---@param force_index uint
+---@return ZP.Grid
+function backend.get_grid(force_index)
+  return ensure_force(force_index).grid
+end
+
+---@param force_index uint
+---@param x double
+---@param y double
+---@return integer, integer
+function backend.tile_to_cell(force_index, x, y)
+  local g = backend.get_grid(force_index)
+  local cx = math.floor((x - g.x_offset) / g.width)
+  local cy = math.floor((y - g.y_offset) / g.height)
+  return cx, cy
+end
+
+---@param force_index uint
+---@param name string
+---@param color Color
+---@return ZP.Zone, string description
+function backend.add_zone(force_index, name, color)
+  local f = ensure_force(force_index)
+
+  local id = f.next_zone_id
+  f.next_zone_id = id + 1
+  local zone = { id = id, name = name, color = { r = color.r or 0, g = color.g or 0, b = color.b or 0, a = color.a or 1 }, order = id }
+  f.zones[id] = zone
+  notify_zones_changed(force_index)
+  return zone, ("Add zone '%s'"):format(name)
+end
+
+---@param force_index uint
+---@param id uint
+---@param name string|nil
+---@param color Color|nil
+---@return ZP.Zone, string description
+function backend.edit_zone(force_index, id, name, color)
+  local f = ensure_force(force_index)
+  if id == EMPTY_ZONE_ID then error("Cannot edit Empty zone") end
+  local z = f.zones[id]
+  if not z then error("Zone does not exist") end
+  local prev = { name = z.name, color = {r=z.color.r,g=z.color.g,b=z.color.b,a=z.color.a} }
+  if name and name ~= "" then
+    for _, other in pairs(f.zones) do
+      if other.id ~= id and other.name == name then error("Zone name must be unique") end
+    end
+    z.name = name
+  end
+  if color then
+    z.color = { r = color.r or 0, g = color.g or 0, b = color.b or 0, a = color.a or 1 }
+  end
+  notify_zones_changed(force_index)
+  return z, ("Edit zone '%s'"):format(prev.name)
+end
+
+---@param force_index uint
+---@param id uint
+---@param replacement_id uint|nil
+---@return string description
+function backend.delete_zone(force_index, id, replacement_id)
+  local f = ensure_force(force_index)
+  if id == EMPTY_ZONE_ID then error("Cannot delete Empty zone") end
+  local z = f.zones[id]
+  if not z then error("Zone does not exist") end
+  local replace = replacement_id
+  if replace == EMPTY_ZONE_ID then replace = nil end
+  if replace ~= nil and not f.zones[replace] then error("Replacement zone does not exist") end
+
+  -- Remap assignments across all surfaces
+  for surface_index, surface in pairs(f.images) do
+    for key, value in pairs(surface.cells) do
+      if value == id then
+        surface.cells[key] = replace
+      end
+    end
+    -- Request refresh for surface since many cells may have changed
+    notify_cells_changed(force_index, surface_index, nil, nil)
+  end
+  f.zones[id] = nil
+  notify_zones_changed(force_index)
+  local target_name = (replace == nil) and "(Empty)" or (f.zones[replace] and f.zones[replace].name or tostring(replace))
+  return ("Delete zone '%s' -> %s" ):format(z.name, target_name)
+end
+
+---@param player_index uint
+---@param action table
+local function push_undo(player_index, action)
+  local p = ensure_player(player_index)
+  local stack = p.undo
+  stack[#stack+1] = action
+  -- capacity
+  local cap = storage.zp.undo_capacity or UNDO_CAPACITY
+  if #stack > cap then
+    table.remove(stack, 1)
+  end
+  -- clear redo on new action
+  p.redo = {}
+end
+
+---@param player_index uint
+---@return string|nil
+function backend.peek_undo_description(player_index)
+  local p = ensure_player(player_index)
+  local last = p.undo[#p.undo]
+  return last and last.description or nil
+end
+
+---@param player_index uint
+---@return string|nil
+function backend.peek_redo_description(player_index)
+  local p = ensure_player(player_index)
+  local last = p.redo[#p.redo]
+  return last and last.description or nil
+end
+
+---Return whether there is at least one undo action available for the player.
+---@param player_index uint
+---@return boolean
+function backend.can_undo(player_index)
+  local p = ensure_player(player_index)
+  return (p.undo and #p.undo or 0) > 0
+end
+
+---Return whether there is at least one redo action available for the player.
+---@param player_index uint
+---@return boolean
+function backend.can_redo(player_index)
+  local p = ensure_player(player_index)
+  return (p.redo and #p.redo or 0) > 0
+end
+
+---@param player_index uint
+---@param force_index uint
+---@param surface_index uint
+---@param zone_id uint|nil
+---@param left_top MapPosition
+---@param right_bottom MapPosition
+---@return number affected_count
+function backend.fill_rectangle(player_index, force_index, surface_index, zone_id, left_top, right_bottom)
+  local f = ensure_force(force_index)
+  local surf = ensure_surface(force_index, surface_index)
+  local g = f.grid
+
+  local cx1 = math.floor((left_top.x - g.x_offset) / g.width)
+  local cy1 = math.floor((left_top.y - g.y_offset) / g.height)
+  local cx2 = math.floor((right_bottom.x - g.x_offset) / g.width)
+  local cy2 = math.floor((right_bottom.y - g.y_offset) / g.height)
+
+  local minx, maxx = math.min(cx1, cx2), math.max(cx1, cx2)
+  local miny, maxy = math.min(cy1, cy2), math.max(cy1, cy2)
+
+  local affected = {}
+  local changed_set = {}
+  local assign_id = normalize_zone_id(zone_id)
+
+  local count = 0
+
+  for x = minx, maxx do
+    for y = miny, maxy do
+      local key = cell_key(x, y)
+      local prev = surf.cells[key]
+      if prev == EMPTY_ZONE_ID then prev = nil end -- sanitize stray 0s to nil
+      if prev ~= assign_id then
+        affected[key] = { prev = prev }
+        surf.cells[key] = assign_id
+        changed_set[key] = true
+        count = count + 1
+      end
+    end
+  end
+
+  local desc
+  if assign_id == nil then
+    desc = "Erase rectangle"
+  else
+    local z = f.zones[assign_id]
+    desc = ("Fill rectangle with '%s'" ):format(z and z.name or tostring(assign_id))
+  end
+
+  push_undo(player_index, { type = "rect", force_index = force_index, surface_index = surface_index, description = desc, affected = affected, new_zone_id = assign_id, timestamp = (game and game.tick) or 0 })
+  notify_cells_changed(force_index, surface_index, changed_set, assign_id)
+  return count
+end
+
+---@param action table
+function backend.undo_rect(action)
+  local surf = ensure_surface(action.force_index, action.surface_index)
+  local changed_set = {}
+  for key, info in pairs(action.affected or {}) do
+    surf.cells[key] = info.prev
+    changed_set[key] = true
+  end
+  notify_cells_changed(action.force_index, action.surface_index, changed_set, nil)
+end
+
+---@param action table
+function backend.redo_rect(action)
+  local surf = ensure_surface(action.force_index, action.surface_index)
+  local changed_set = {}
+  for key, _ in pairs(action.affected or {}) do
+    surf.cells[key] = action.new_zone_id
+    changed_set[key] = true
+  end
+  notify_cells_changed(action.force_index, action.surface_index, changed_set, action.new_zone_id)
+end
+
+
+---@param player_index uint
+function backend.undo(player_index)
+  local p = ensure_player(player_index)
+  local action = table.remove(p.undo)
+  if not action then return false end
+
+  if action.type == "rect" then
+    backend.undo_rect(action)
+  elseif action.type == "zone-add" then
+    -- Not used currently; reserved for future UI wiring
+  elseif action.type == "zone-edit" then
+    -- Reserved
+  elseif action.type == "zone-delete" then
+    -- Reserved
+  elseif action.type == "reproject" then
+    local f = ensure_force(action.force_index)
+    local surf = ensure_surface(action.force_index, action.surface_index)
+    if surf and action.before_map then
+      surf.cells = action.before_map
+      notify_cells_changed(action.force_index, action.surface_index, nil, nil)
+    end
+    if action.before_grid then
+      f.grid = action.before_grid
+      notify_grid_changed(action.force_index)
+    end
+  end
+
+  p.redo[#p.redo+1] = action
+  return true
+end
+
+---@param player_index uint
+function backend.redo(player_index)
+  local p = ensure_player(player_index)
+  local action = table.remove(p.redo)
+  if not action then return false end
+
+  if action.type == "rect" then
+    backend.redo_rect(action)
+  elseif action.type == "reproject" then
+    local f = ensure_force(action.force_index)
+    local surf = ensure_surface(action.force_index, action.surface_index)
+    if surf and action.after_map then
+      surf.cells = action.after_map
+      notify_cells_changed(action.force_index, action.surface_index, nil, nil)
+    end
+    if action.after_grid then
+      f.grid = action.after_grid
+      notify_grid_changed(action.force_index)
+    end
+  end
+
+  p.undo[#p.undo+1] = action
+  return true
+end
+
+---@param force_index uint
+---@param new_props ZP.Grid
+---@param opts {reproject: boolean}|nil
+function backend.set_grid(force_index, new_props, opts)
+  local f = ensure_force(force_index)
+  local old = f.grid
+  local reproject = opts and opts.reproject
+  if not reproject then
+    f.grid = {
+      width = new_props.width or old.width,
+      height = new_props.height or old.height,
+      x_offset = new_props.x_offset or old.x_offset,
+      y_offset = new_props.y_offset or old.y_offset,
+      opacity = new_props.opacity or old.opacity,
+    }
+    notify_grid_changed(force_index)
+    return "Update grid properties"
+  end
+
+  -- Reproject cells per surface: map old cell keys to new grid cell keys
+  for surface_index, surface in pairs(f.images) do
+    local before_map = surface.cells
+    local after_map = {}
+    for key, zone_id in pairs(before_map) do
+      local ocx, ocy = parse_cell_key(key)
+      -- Approximate representative tile position at cell origin (top-left)
+      local tile_x = ocx * old.width + old.x_offset
+      local tile_y = ocy * old.height + old.y_offset
+      local ncx = math.floor((tile_x - (new_props.x_offset or old.x_offset)) / (new_props.width or old.width))
+      local ncy = math.floor((tile_y - (new_props.y_offset or old.y_offset)) / (new_props.height or old.height))
+      local nkey = cell_key(ncx, ncy)
+      local normalized = normalize_zone_id(zone_id)
+      after_map[nkey] = normalized
+    end
+    surface.cells = after_map
+    -- record action per surface; UI can choose to aggregate
+    push_undo(1, { -- player_index 1 as placeholder; UI should supply actual player later
+      type = "reproject",
+      description = "Reproject grid assignments",
+      force_index = force_index,
+      surface_index = surface_index,
+      before_map = before_map,
+      after_map = after_map,
+      before_grid = old,
+      after_grid = {
+        width = new_props.width or old.width,
+        height = new_props.height or old.height,
+        x_offset = new_props.x_offset or old.x_offset,
+        y_offset = new_props.y_offset or old.y_offset,
+        opacity = new_props.opacity or old.opacity,
+      },
+      timestamp = (game and game.tick) or 0,
+    })
+    notify_cells_changed(force_index, surface_index, nil, nil)
+  end
+  -- Finally set the new grid
+  f.grid = {
+    width = new_props.width or old.width,
+    height = new_props.height or old.height,
+    x_offset = new_props.x_offset or old.x_offset,
+    y_offset = new_props.y_offset or old.y_offset,
+    opacity = new_props.opacity or old.opacity,
+  }
+  notify_grid_changed(force_index)
+  return "Reproject and update grid properties"
+end
+
+
+return backend
+
