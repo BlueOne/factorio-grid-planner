@@ -132,7 +132,7 @@ end
 local function test_rectangle_fill_undo_redo()
   reset_backend()
   local c = ctx()
-  local zone = select(1, backend.add_zone(c.force_index, "Z1", {r=1,g=0,b=0,a=1})) ---@type ZP.Zone
+  local zone = select(1, backend.add_zone(c.force_index, c.player_index, "Z1", {r=1,g=0,b=0,a=1})) ---@type ZP.Zone
 
   local lt = {x=0,y=0}; local rb = {x=63,y=31} -- 2x1 cells: (0,0) and (1,0)
   local calls = with_captured_notifications(function(calls)
@@ -170,12 +170,12 @@ end
 local function test_line_draw_orientation()
   reset_backend()
   local c = ctx()
-  local z = select(1, backend.add_zone(c.force_index, "ZL", {r=0,g=1,b=0,a=1})) ---@type ZP.Zone
+  local z = select(1, backend.add_zone(c.force_index, c.player_index, "ZL", {r=0,g=1,b=0,a=1})) ---@type ZP.Zone
 
   -- vertical (width<=height)
   do
     local g = backend.get_grid(c.force_index)
-    backend.set_grid(c.force_index, {width=32,height=32,x_offset=g.x_offset,y_offset=g.y_offset,opacity=g.opacity}, {reproject=false})
+    backend.set_grid(c.force_index, c.player_index, {width=32,height=32,x_offset=g.x_offset,y_offset=g.y_offset}, {reproject=false})
   end
   local calls_v = with_captured_notifications(function()
     local sel_h_v = 64 ---@type uint
@@ -188,7 +188,7 @@ local function test_line_draw_orientation()
   -- horizontal (width>height)
   do
     local g = backend.get_grid(c.force_index)
-    backend.set_grid(c.force_index, {width=64,height=32,x_offset=g.x_offset,y_offset=g.y_offset,opacity=g.opacity}, {reproject=false})
+    backend.set_grid(c.force_index, c.player_index, {width=64,height=32,x_offset=g.x_offset,y_offset=g.y_offset}, {reproject=false})
   end
   local calls_h = with_captured_notifications(function()
     local sel_h_h = 128 ---@type uint
@@ -205,12 +205,12 @@ end
 local function test_zone_delete_remap()
   reset_backend()
   local c = ctx()
-  local za = select(1, backend.add_zone(c.force_index, "A", {r=1,g=1,b=1,a=1})) ---@type ZP.Zone
-  local zb = select(1, backend.add_zone(c.force_index, "B", {r=0,g=0,b=1,a=1})) ---@type ZP.Zone
+  local za = select(1, backend.add_zone(c.force_index, c.player_index, "A", {r=1,g=1,b=1,a=1})) ---@type ZP.Zone
+  local zb = select(1, backend.add_zone(c.force_index, c.player_index, "B", {r=0,g=0,b=1,a=1})) ---@type ZP.Zone
   backend.fill_rectangle(c.player_index, c.force_index, c.surface_index, zb.id, {x=0,y=0}, {x=31,y=31}) -- (0,0)
 
   local calls = with_captured_notifications(function()
-    backend.delete_zone(c.force_index, zb.id, za.id)
+    backend.delete_zone(c.force_index, c.player_index, zb.id, za.id)
   end)
   local cells = get_cells(c.force_index, c.surface_index)
   assert_eq(cells[cell_key(0,0)], za.id)
@@ -222,7 +222,7 @@ end
 local function test_set_grid_notifications_and_reproject()
   reset_backend()
   local c = ctx()
-  local z = select(1, backend.add_zone(c.force_index, "G", {r=1,g=0.5,b=0,a=1})) ---@type ZP.Zone
+  local z = select(1, backend.add_zone(c.force_index, c.player_index, "G", {r=1,g=0.5,b=0,a=1})) ---@type ZP.Zone
 
   -- place a cell at (1,1)
   backend.fill_rectangle(c.player_index, c.force_index, c.surface_index, z.id, {x=32,y=32}, {x=63,y=63})
@@ -232,14 +232,14 @@ local function test_set_grid_notifications_and_reproject()
   -- notify on grid change without reproject
   local calls1 = with_captured_notifications(function()
     local g = backend.get_grid(c.force_index)
-    backend.set_grid(c.force_index, {width=32,height=32,x_offset=g.x_offset,y_offset=g.y_offset,opacity=g.opacity}, {reproject=false})
+    backend.set_grid(c.force_index, c.player_index, {width=32,height=32,x_offset=g.x_offset,y_offset=g.y_offset}, {reproject=false})
   end)
   assert_true(#calls1.grid >= 1, "grid change should notify")
 
   -- reproject to 16x16, old (1,1) origin tile is (32,32) -> new cell (2,2)
   local calls2 = with_captured_notifications(function()
     local g = backend.get_grid(c.force_index)
-    backend.set_grid(c.force_index, {width=16,height=16,x_offset=g.x_offset,y_offset=g.y_offset,opacity=g.opacity}, {reproject=true})
+    backend.set_grid(c.force_index, c.player_index, {width=16,height=16,x_offset=g.x_offset,y_offset=g.y_offset}, {reproject=true})
   end)
   cells = get_cells(c.force_index, c.surface_index)
   assert_true(cells[cell_key(1,1)] == nil)
@@ -266,7 +266,7 @@ local function test_tile_to_cell_offsets_and_negative()
   reset_backend()
   local c = ctx()
   local g = backend.get_grid(c.force_index)
-  backend.set_grid(c.force_index, {width=32,height=32,x_offset=16,y_offset=32,opacity=g.opacity}, {reproject=false})
+  backend.set_grid(c.force_index, c.player_index, {width=32,height=32,x_offset=16,y_offset=32}, {reproject=false})
 
   local x0,y0 = backend.tile_to_cell(c.force_index, 16.0, 32.0)
   assert_eq(x0, 0, "offset origin x")
@@ -290,7 +290,7 @@ end
 local function test_eraser_behavior_nil_vs_empty()
   reset_backend()
   local c = ctx()
-  local z = select(1, backend.add_zone(c.force_index, "E1", {r=0.8,g=0.2,b=0.2,a=1})) ---@type ZP.Zone
+  local z = select(1, backend.add_zone(c.force_index, c.player_index, "E1", {r=0.8,g=0.2,b=0.2,a=1})) ---@type ZP.Zone
 
   -- Fill (0,0)
   backend.fill_rectangle(c.player_index, c.force_index, c.surface_index, z.id, {x=0,y=0}, {x=31,y=31})
@@ -321,10 +321,10 @@ local function test_alt_mode_line_orientation()
   -- Case 1: width <= height, alt-mode flips to horizontal
   reset_backend()
   local c = ctx()
-  local z = select(1, backend.add_zone(c.force_index, "ALT", {r=0,g=0.5,b=1,a=1})) ---@type ZP.Zone
+  local z = select(1, backend.add_zone(c.force_index, c.player_index, "ALT", {r=0,g=0.5,b=1,a=1})) ---@type ZP.Zone
   do
     local g = backend.get_grid(c.force_index)
-    backend.set_grid(c.force_index, {width=32,height=32,x_offset=g.x_offset,y_offset=g.y_offset,opacity=g.opacity}, {reproject=false})
+    backend.set_grid(c.force_index, c.player_index, {width=32,height=32,x_offset=g.x_offset,y_offset=g.y_offset}, {reproject=false})
   end
   local calls_h = with_captured_notifications(function()
     backend.draw_line(c.player_index, c.force_index, c.surface_index, z.id, {x=0,y=0}, 64, true)
@@ -337,10 +337,10 @@ local function test_alt_mode_line_orientation()
   -- Case 2: width > height, alt-mode flips to vertical
   reset_backend()
   c = ctx()
-  z = select(1, backend.add_zone(c.force_index, "ALT2", {r=0.2,g=0.8,b=0.4,a=1})) ---@type ZP.Zone
+  z = select(1, backend.add_zone(c.force_index, c.player_index, "ALT2", {r=0.2,g=0.8,b=0.4,a=1})) ---@type ZP.Zone
   do
     local g = backend.get_grid(c.force_index)
-    backend.set_grid(c.force_index, {width=64,height=32,x_offset=g.x_offset,y_offset=g.y_offset,opacity=g.opacity}, {reproject=false})
+    backend.set_grid(c.force_index, c.player_index, {width=64,height=32,x_offset=g.x_offset,y_offset=g.y_offset}, {reproject=false})
   end
   local calls_v = with_captured_notifications(function()
     backend.draw_line(c.player_index, c.force_index, c.surface_index, z.id, {x=0,y=0}, 64, true)
@@ -356,9 +356,9 @@ end
 local function test_zone_ids_unique()
   reset_backend()
   local c = ctx()
-  local z1 = select(1, backend.add_zone(c.force_index, "Z_A", {r=1,g=0,b=0,a=1}))
-  local z2 = select(1, backend.add_zone(c.force_index, "Z_B", {r=0,g=1,b=0,a=1}))
-  local z3 = select(1, backend.add_zone(c.force_index, "Z_C", {r=0,g=0,b=1,a=1}))
+  local z1 = select(1, backend.add_zone(c.force_index, c.player_index, "Z_A", {r=1,g=0,b=0,a=1}))
+  local z2 = select(1, backend.add_zone(c.force_index, c.player_index, "Z_B", {r=0,g=1,b=0,a=1}))
+  local z3 = select(1, backend.add_zone(c.force_index, c.player_index, "Z_C", {r=0,g=0,b=1,a=1}))
   assert_true(z1 and z2 and z3, "zones should be created")
   assert_true(z1.id ~= 0 and z2.id ~= 0 and z3.id ~= 0, "zone ids must be non-zero (0 reserved for Empty)")
   assert_true(z1.id ~= z2.id and z2.id ~= z3.id and z1.id ~= z3.id, "zone ids must be unique")
@@ -368,10 +368,10 @@ end
 local function test_zone_delete_to_empty()
   reset_backend()
   local c = ctx()
-  local z = select(1, backend.add_zone(c.force_index, "Z_DEL", {r=0.6,g=0.6,b=0.1,a=1}))
+  local z = select(1, backend.add_zone(c.force_index, c.player_index, "Z_DEL", {r=0.6,g=0.6,b=0.1,a=1}))
   backend.fill_rectangle(c.player_index, c.force_index, c.surface_index, z.id, {x=0,y=0}, {x=31,y=31})
   local calls = with_captured_notifications(function()
-    backend.delete_zone(c.force_index, z.id, nil) -- replace with Empty
+    backend.delete_zone(c.force_index, c.player_index, z.id, nil) -- replace with Empty
   end)
   local cells = get_cells(c.force_index, c.surface_index)
   assert_true(cells[cell_key(0,0)] == nil, "delete to Empty should clear to nil")
@@ -382,7 +382,7 @@ end
 local function test_undo_redo_descriptions_and_stacks()
   reset_backend()
   local c = ctx()
-  local z = select(1, backend.add_zone(c.force_index, "Z_U", {r=0.3,g=0.3,b=0.9,a=1}))
+  local z = select(1, backend.add_zone(c.force_index, c.player_index, "Z_U", {r=0.3,g=0.3,b=0.9,a=1}))
 
   -- Perform an action
   backend.fill_rectangle(c.player_index, c.force_index, c.surface_index, z.id, {x=0,y=0}, {x=31,y=31})
@@ -479,9 +479,9 @@ remote.add_interface("zone_planner_demo", {
     end
     table.sort(ids)
     if #ids < 3 then
-      backend.add_zone(f_idx, "Demo A", {r=1,g=0.2,b=0.2,a=1})
-      backend.add_zone(f_idx, "Demo B", {r=0.2,g=1,b=0.2,a=1})
-      backend.add_zone(f_idx, "Demo C", {r=0.2,g=0.2,b=1,a=1})
+      backend.add_zone(f_idx, 1, "Demo A", {r=1,g=0.2,b=0.2,a=1})
+      backend.add_zone(f_idx, 1, "Demo B", {r=0.2,g=1,b=0.2,a=1})
+      backend.add_zone(f_idx, 1, "Demo C", {r=0.2,g=0.2,b=1,a=1})
       ids = {}
       for id, z in pairs(storage.zp.forces[f_idx].zones) do if id ~= 0 then ids[#ids+1] = id end end
       table.sort(ids)

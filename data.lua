@@ -14,7 +14,9 @@ local function selection_tool(
     name = name,
     icon = icon or "__base__/graphics/icons/blueprint.png",
     icon_size = icon_size or 64,
-    flags = {"only-in-cursor"},
+    dark_background_icon = icon or "__base__/graphics/icons/blueprint.png",
+    dark_background_icon_size = icon_size or 64,
+    flags = {"only-in-cursor", "not-stackable", "spawnable"},
     subgroup = "tool",
     order = "a[zone-planner]-" .. name,
     stack_size = 1,
@@ -28,6 +30,7 @@ local function selection_tool(
       cursor_box_type = "entity",
       mode = "nothing"
     },
+    mouse_cursor = "selection-tool-cursor",
   }
 end
 
@@ -42,3 +45,26 @@ local tools = {
 }
 
 data:extend(tools)
+
+local hotkeys = {
+  {
+    type = "custom-input",
+    name = "zp-select-rect-tool",
+    key_sequence = "CONTROL + SHIFT + R",
+    consuming = "game-only"
+  },
+  {
+    type = "custom-input",
+    name = "zp-visibility-increase",
+    key_sequence = "CONTROL + SHIFT + W",
+    consuming = "game-only"
+  },
+  {
+    type = "custom-input",
+    name = "zp-visibility-decrease",
+    key_sequence = "CONTROL + SHIFT + S",
+    consuming = "game-only"
+  },
+}
+
+data:extend(hotkeys)
