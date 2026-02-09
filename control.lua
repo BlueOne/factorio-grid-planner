@@ -1,11 +1,13 @@
 
-Version = "0.1.0"
+Version = "0.1.1"
 Mod_Prefix = "jump"
 
 -- Utils
 EventHandler = require("__core__/lualib/event_handler")
 flib_gui = require("__flib__.gui")
 EventHandler.add_lib(flib_gui)
+
+Util = require("__core__/lualib/util") util = Util
 
 
 -- Util = require("scripts/util") util = Util

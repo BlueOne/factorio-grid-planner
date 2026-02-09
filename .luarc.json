@@ -1,0 +1,29 @@
+{
+  "runtime.version": "Lua 5.2",
+  "runtime.path": [
+    "?.lua",
+    "?/init.lua",
+    "__flib__/?.lua",
+    "__flib__/?/init.lua"
+  ],
+  "workspace.library": [
+    "__flib__"
+  ],
+  "diagnostics.globals": [
+    "data",
+    "defines",
+    "game",
+    "script",
+    "remote",
+    "commands",
+    "settings",
+    "rcon",
+    "rendering",
+    "mods",
+    "log"
+  ],
+  "workspace.ignoreDir": [
+    ".vscode",
+    "graphics"
+  ]
+}

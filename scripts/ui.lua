@@ -1,41 +1,18 @@
 -- UI module for Zone Planner
--- Builds a mod-gui button and a main panel; toggles visibility on click.
 
 local ui = {}
 local backend = require("scripts/backend")
 local flib_gui = require("__flib__.gui")
+local dialog = require("scripts/dialog")
 
 local mod_gui = require("mod-gui")
 
 ---@class ZP.UiState
 ---@field is_building boolean
----@field players table<uint, ZP.PlayerUiState>
-
----@class ZP.PlayerUiState
----@field selected_zone_id uint
----@field selected_tool string|nil
 
 -- Element names
 local TOGGLE_BUTTON_NAME = "zone_planner_toggle_button"
 local MAIN_FRAME_NAME = "zone_planner_main_frame"
-
-local function ensure_button(player)
-  local flow = mod_gui.get_button_flow(player)
-  local btn = flow[TOGGLE_BUTTON_NAME]
-  if not btn then
-    btn = flow.add{
-      type = "button",
-      name = TOGGLE_BUTTON_NAME,
-      caption = {"zone-planner.mod-name"},
-      tooltip = {"zone-planner.mod-name"},
-    }
-  end
-  -- Stretch vertically to fill the toolbar space
-  if btn and btn.valid and btn.style then
-    btn.style.vertically_stretchable = true
-  end
-  return btn
-end
 
 local function ensure_main_frame(player)
   local frame_flow = mod_gui.get_frame_flow(player)
@@ -51,64 +28,12 @@ local function ensure_main_frame(player)
   return frame
 end
 
-local function toggle_main_frame(player)
-  local frame = ensure_main_frame(player)
-  frame.visible = not frame.visible
-  -- Enable alt mode when opening UI
-  if frame.visible then
-    player.game_view_settings.show_entity_info = true
-  end
-end
 
----Return the currently selected zone id for the player (UI state preferred).
+---Return the currently selected zone id for the player (from backend).
 ---@param player_index uint
 ---@return uint|nil
 function ui.get_selected_zone_id(player_index)
-  storage.zp_ui = storage.zp_ui or {}
-  local pui = storage.zp_ui.players and storage.zp_ui.players[player_index]
-  local id = pui and pui.selected_zone_id
-  if id == nil then
-    local p = storage.zp and storage.zp.players and storage.zp.players[player_index]
-    id = p and p.selected_zone_id or 0
-  end
-  return id
-end
-
--- Helper: ensure player UI state exists
----@param player_index uint
----@return ZP.PlayerUiState
-local function ensure_player_ui_state(player_index)
-  storage.zp_ui = storage.zp_ui or {}
-  storage.zp_ui.players = storage.zp_ui.players or {}
-  local pstate = storage.zp_ui.players[player_index] or {}
-  storage.zp_ui.players[player_index] = pstate
-  return pstate
-end
-
--- Helper: extract text from textfield
----@param element LuaGuiElement|nil
----@return string
-local function get_text(element)
-  return element and element.text or ""
-end
-
--- Helper: parse number with fallback
----@param s string|nil
----@param default number
----@return number
-local function to_number(s, default)
-  local n = tonumber(s)
-  return n or default
-end
-
--- Helper: extract zone id from element name pattern
----@param element_name string
----@param pattern string
----@return uint|nil
-local function extract_zone_id(element_name, pattern)
-  local id_str = element_name:match(pattern or "^zp_zone_(%d+)$")
-  if not id_str then return nil end
-  return tonumber(id_str)
+  return backend.get_selected_zone_id(player_index)
 end
 
 -- Helper: build color picker (sliders + preview) for dialog
@@ -118,6 +43,18 @@ end
 ---@param handler function Event handler for slider changes
 ---@return table Flow definition containing the sliders and preview
 local function build_color_picker(r, g, b, handler)
+  -- Helper: create a color slider row
+  local function color_slider_row(label, name, value)
+    return {
+      type = "flow", direction = "horizontal",
+      style_mods = { horizontally_stretchable = true },
+      children = {
+        { type = "label", caption = label, style_mods = { minimal_width = 50 } },
+        { type = "slider", name = name, minimum_value = 0, maximum_value = 255, value = math.floor(value * 255), handler = handler, style_mods = { horizontally_stretchable = true, minimal_width = 120 } }
+      }
+    }
+  end
+  
   return {
     type = "flow",
     direction = "vertical",
@@ -130,30 +67,9 @@ local function build_color_picker(r, g, b, handler)
         name = "zp_color_sliders",
         style_mods = { horizontally_stretchable = true, vertical_spacing = 2 },
         children = {
-          {
-            type = "flow", direction = "horizontal",
-            style_mods = { horizontally_stretchable = true },
-            children = {
-              { type = "label", caption = "Red", style_mods = { minimal_width = 50 } },
-              { type = "slider", name = "zp_color_r", minimum_value = 0, maximum_value = 255, value = math.floor((r or 1) * 255), handler = handler, style_mods = { horizontally_stretchable = true, minimal_width = 120 } }
-            }
-          },
-          {
-            type = "flow", direction = "horizontal",
-            style_mods = { horizontally_stretchable = true },
-            children = {
-              { type = "label", caption = "Green", style_mods = { minimal_width = 50 } },
-              { type = "slider", name = "zp_color_g", minimum_value = 0, maximum_value = 255, value = math.floor((g or 1) * 255), handler = handler, style_mods = { horizontally_stretchable = true, minimal_width = 120 } }
-            }
-          },
-          {
-            type = "flow", direction = "horizontal",
-            style_mods = { horizontally_stretchable = true },
-            children = {
-              { type = "label", caption = "Blue", style_mods = { minimal_width = 50 } },
-              { type = "slider", name = "zp_color_b", minimum_value = 0, maximum_value = 255, value = math.floor((b or 1) * 255), handler = handler, style_mods = { horizontally_stretchable = true, minimal_width = 120 } }
-            }
-          }
+          color_slider_row("Red", "zp_color_r", r or 1),
+          color_slider_row("Green", "zp_color_g", g or 1),
+          color_slider_row("Blue", "zp_color_b", b or 1),
         }
       },
       {
@@ -189,29 +105,20 @@ local function find_child(parent, name)
   return nil
 end
 
--- Helper: update color preview progressbar from current slider values
----@param dlg LuaGuiElement Dialog frame
----@param preview_name string Element name of color preview progressbar
----@param r_name string Element name of red slider
----@param g_name string Element name of green slider
----@param b_name string Element name of blue slider
-local function update_color_preview(dlg, preview_name, r_name, g_name, b_name)
-  local r_elem = find_child(dlg, r_name)
-  local g_elem = find_child(dlg, g_name)
-  local b_elem = find_child(dlg, b_name)
-  local r = r_elem and r_elem.slider_value or 255
-  local g = g_elem and g_elem.slider_value or 255
-  local b = b_elem and b_elem.slider_value or 255
-  local preview = find_child(dlg, preview_name)
-  if preview and preview.valid then
-    preview.style.color = { r = r/255, g = g/255, b = b/255 }
-  end
-end
-
--- Helper: update color preview for dialog
----@param dlg LuaGuiElement
-local function update_color_preview_for_dialog(dlg)
-  update_color_preview(dlg, "zp_color_preview", "zp_color_r", "zp_color_g", "zp_color_b")
+-- Helper: create a labeled textfield row for dialogs
+---@param label string Label text
+---@param name string Element name
+---@param value number|string Initial value
+---@return table Flow definition
+local function labeled_textfield(label, name, value)
+  return {
+    type = "flow", direction = "horizontal",
+    children = {
+      { type = "label", caption = label },
+      { type = "empty-widget", style_mods = { minimal_width = 8, horizontally_stretchable = true } },
+      { type = "textfield", name = name, text = tostring(value), style_mods = { width = 100} }
+    }
+  }
 end
 
 -- Helper: visibility caption for level 0..3
@@ -235,148 +142,91 @@ local function update_visibility_label(dlg, idx)
   end
 end
 
--- Helper: close any open Zone Planner dialogs except the one being opened
----@param parent LuaGuiElement
----@param keep_name string|nil
-local function close_other_dialogs(parent, keep_name)
-  if not parent or not parent.valid then return end
-  local dialog_names = {
-    "zp_properties_dialog",
-    "zp_zone_dialog",
-    "zp_zone_name_dialog",
-    "zp_zone_color_dialog",
-    "zp_visibility_dialog",
-  }
-  for _, name in pairs(dialog_names) do
-    if name ~= keep_name then
-      local dlg = parent[name]
-      if dlg and dlg.valid then
-        dlg.destroy()
-      end
+-- Helper: update color preview progressbar from current slider values
+---@param dlg LuaGuiElement Dialog frame
+---@param preview_name string Element name of color preview progressbar
+---@param r_name string Element name of red slider
+---@param g_name string Element name of green slider
+---@param b_name string Element name of blue slider
+local function update_color_preview(dlg, preview_name, r_name, g_name, b_name)
+  local r_elem = find_child(dlg, r_name)
+  local g_elem = find_child(dlg, g_name)
+  local b_elem = find_child(dlg, b_name)
+  local r = r_elem and r_elem.slider_value or 255
+  local g = g_elem and g_elem.slider_value or 255
+  local b = b_elem and b_elem.slider_value or 255
+  local preview = find_child(dlg, preview_name)
+  if preview and preview.valid then
+    preview.style.color = { r = r/255, g = g/255, b = b/255 }
+  end
+end
+
+-- UI event handlers
+local handlers = {}
+
+-- Pipette handler: select zone under cursor if any
+function handlers.pipette(e)
+  if e.in_gui then return end
+  local player = game.get_player(e.player_index)
+  if not player or not player.valid then return end
+  local pos = e.cursor_position
+  if not pos then return end
+  local force_index = player.force.index
+  local surface_index = player.surface.index
+  local img = backend.get_surface_image(force_index, surface_index)
+  local cx, cy = backend.tile_to_cell(force_index, pos.x, pos.y)
+  local zone_id = backend.get_from_image(img, cx, cy)
+  if zone_id and zone_id ~= 0 then
+    backend.set_selected_zone_id(player.index, zone_id)
+    ui.rebuild_player(player.index, "pipette")
+  end
+end
+
+-- Register dialogs with their handlers
+dialog.register("zp_properties_dialog", {
+  on_confirm = function(dlg, player)
+    local g = backend.get_grid(player.force.index)
+    local width_elem = find_child(dlg, "zp_prop_width")
+    local height_elem = find_child(dlg, "zp_prop_height")
+    local x_offset_elem = find_child(dlg, "zp_prop_x_offset")
+    local y_offset_elem = find_child(dlg, "zp_prop_y_offset")
+    local reproject_elem = find_child(dlg, "zp_prop_reproject")
+    local new_props = {
+      width = tonumber(width_elem and width_elem.text) or g.width or 32,
+      height = tonumber(height_elem and height_elem.text) or g.height or 32,
+      x_offset = tonumber(x_offset_elem and x_offset_elem.text) or g.x_offset or 0,
+      y_offset = tonumber(y_offset_elem and y_offset_elem.text) or g.y_offset or 0,
+    }
+    local reproject = (reproject_elem and reproject_elem.state) or false
+    backend.set_grid(player.force.index, player.index, new_props, { reproject = reproject })
+  end
+})
+
+dialog.register("zp_visibility_dialog", {
+  on_confirm = function(dlg, player)
+    local idx = dlg.tags and tonumber(dlg.tags.visibility_index)
+    backend.set_player_visibility(player.index, { index = idx })
+  end
+})
+
+dialog.register("zp_zone_dialog", {
+  on_confirm = function(dlg, player)
+    local name_elem = find_child(dlg, "zp_zone_name")
+    local name = name_elem and name_elem.text or ""
+    local tags = dlg.tags or {}
+    local r = tags.color_r or 255
+    local g = tags.color_g or 255
+    local b = tags.color_b or 255
+    local color = { r = r/255, g = g/255, b = b/255, a = 1 }
+    
+    local zone_id = tonumber(tags.zone_id)
+    if zone_id then
+      backend.edit_zone(player.force.index, player.index, zone_id, name, color)
+    else
+      backend.add_zone(player.force.index, player.index, name, color)
     end
   end
-end
-
--- Helper factory: create a dialog cancel handler
----@class ZP.CancelHandlerOpts
----@field dialog_name string
----@field get_parent fun(player: LuaPlayer): LuaGuiElement
----@field clear_opened boolean|nil
-
----@param opts ZP.CancelHandlerOpts
----@return function
-local function make_cancel_handler(opts)
-  return function(e)
-    local player = game.get_player(e.player_index)
-    if not player then return end
-    local parent = opts.get_parent(player)
-    local dlg = parent[opts.dialog_name]
-    if dlg and dlg.valid then dlg.destroy() end
-    if opts.clear_opened then player.opened = nil end
-  end
-end
-
--- Helper factory: create a dialog confirm handler
----@class ZP.ConfirmHandlerOpts
----@field dialog_name string
----@field get_parent fun(player: LuaPlayer): LuaGuiElement
----@field on_confirm fun(e: any, dlg: LuaGuiElement, player: LuaPlayer)
-
----@param opts ZP.ConfirmHandlerOpts
----@return function
-local function make_confirm_handler(opts)
-  return function(e)
-    local player = game.get_player(e.player_index)
-    if not player then return end
-    local parent = opts.get_parent(player)
-    local dlg = parent[opts.dialog_name]
-    if not dlg or not dlg.valid then return end
-    opts.on_confirm(e, dlg, player)
-    dlg.destroy()
-  end
-end
-
--- Create a standard dialog with header (title + close), content, and bottom confirm button.
----@class ZP.DialogOpts
----@field name string Dialog element name
----@field title string Dialog title
----@field confirm_name string Name of confirm button
----@field cancel_name string Name of cancel button
----@field confirm_handler function Confirm button event handler
----@field cancel_handler function Close/cancel button event handler
----@field parent LuaGuiElement Parent GUI element
----@field children table[] Child element definitions
-
----@param player LuaPlayer
----@param opts ZP.DialogOpts
----@return LuaGuiElement dialog, table elements
-local function create_dialog(player, opts)
-  local parent = opts.parent
-  close_other_dialogs(parent, opts.name)
-  -- destroy any existing
-  local existing = parent[opts.name]
-  if existing and existing.valid then existing.destroy() end
-
-  local children = {
-    -- Header: title + spacer + close
-    {
-      type = "flow",
-      direction = "horizontal",
-      children = {
-        { type = "label", caption = opts.title or "", style = "frame_title" },
-        { type = "empty-widget", style_mods = { horizontally_stretchable = true } },
-        {
-          type = "sprite-button",
-          name = opts.cancel_name,
-          sprite = "utility/close",
-          style = "frame_action_button",
-          handler = opts.cancel_handler
-        }
-      }
-    }
-  }
-
-  -- Content (added by caller)
-  for _, child in ipairs(opts.children or {}) do
-    table.insert(children, child)
-  end
-
-  -- Spacer between content and confirm row
-  table.insert(children, {
-    type = "empty-widget",
-    style_mods = { minimal_height = 4, maximal_height = 4 }
-  })
-
-  -- Bottom confirm row
-  table.insert(children, {
-    type = "flow",
-    direction = "horizontal",
-    children = {
-      { type = "empty-widget", style_mods = { horizontally_stretchable = true } },
-      {
-        type = "sprite-button",
-        name = opts.confirm_name,
-        sprite = "utility/check_mark",
-        style = "zp_icon_button_green",
-        handler = opts.confirm_handler
-      }
-    }
-  })
-
-  -- Build dialog using flib_gui.add
-  local elems, dlg = flib_gui.add(parent, {
-    type = "frame",
-    name = opts.name,
-    direction = "vertical",
-    children = children
-  })
-
-  player.opened = dlg
-  return dlg, elems
-end
-
--- Handler functions for flib dispatch - defined early so they can be used in rebuild_player
-local handlers = {}
+})
 
 ---@class ZP.UiChange
 ---@field kind string Change kind (e.g. "backend-changed", "player-created", "init")
@@ -412,14 +262,28 @@ function ui.rebuild_player(player_index, reason)
   storage.zp_ui.is_building = true
   local player = game.get_player(player_index)
   if not player then storage.zp_ui.is_building = false; return end
-  ensure_button(player)
   local frame = ensure_main_frame(player)
   -- Rebuild panel contents while preserving visibility state
   local was_visible = frame.visible
   frame.clear()
 
+  -- Create toggle button in mod-gui button flow
+  local button_flow = mod_gui.get_button_flow(player)
+  local existing_btn = button_flow[TOGGLE_BUTTON_NAME]
+  if not existing_btn then
+    flib_gui.add(button_flow, {
+      type = "sprite-button",
+      name = TOGGLE_BUTTON_NAME,
+      sprite = "zp-mod-icon",
+      style = "mod_gui_button",
+      tooltip = {"zone-planner.mod-name"},
+      handler = handlers.toggle_main_frame,
+      style_mods = { vertically_stretchable = true }
+    })
+  end
+
   -- Custom header: title + spacer + Properties, Undo, Redo buttons
-  local elems = flib_gui.add(frame, {
+  flib_gui.add(frame, {
     type = "flow",
     direction = "horizontal",
     style_mods = { horizontal_spacing = 8 },
@@ -429,29 +293,29 @@ function ui.rebuild_player(player_index, reason)
       { 
         type = "sprite-button", 
         name = "zp_undo", 
-        sprite = "zp_undo_icon", 
+        sprite = "zp-undo-icon-light", 
         style = "frame_action_button",
         handler = handlers.undo,
         elem_mods = {
           enabled = backend.can_undo(player_index),
-          tooltip = backend.peek_undo_description(player_index) and ("Undo: " .. backend.peek_undo_description(player_index)) or "Undo: None"
+          tooltip = {"tooltips.tooltip-undo", backend.peek_undo_description(player_index) or "None"}
         }
       },
       { 
         type = "sprite-button",
         name = "zp_redo",
-        sprite = "zp_redo_icon",
+        sprite = "zp-redo-icon-light",
         style = "frame_action_button",
         handler = handlers.redo,
         elem_mods = {
           enabled = backend.can_redo(player_index),
-          tooltip = backend.peek_redo_description(player_index) and ("Redo: " .. backend.peek_redo_description(player_index)) or "Redo: None"
+          tooltip = {"tooltips.tooltip-redo", backend.peek_redo_description(player_index) or "None"}
         }
       },
       {
         type = "sprite-button",
         name = "zp_visibility_open",
-        sprite = "zp_visibility_icon",
+        sprite = "zp-visibility-light-16",
         style = "frame_action_button",
         handler = handlers.visibility_open,
         tooltip = "Visibility settings"
@@ -459,9 +323,18 @@ function ui.rebuild_player(player_index, reason)
       {
         type = "sprite-button",
         name = "zp_properties_open",
-        sprite = "utility/rename_icon",
+        sprite = "zp-edit-light-16",
         style = "frame_action_button",
-        handler = handlers.properties_open
+        handler = handlers.properties_open,
+        tooltip = "Grid properties"
+      },
+      {
+        type = "sprite-button",
+        name = "zp_close_main_frame",
+        sprite = "utility/close",
+        style = "frame_action_button",
+        handler = handlers.close_main_frame,
+        tooltip = "Close panel"
       },
     }
   })
@@ -477,7 +350,16 @@ function ui.rebuild_player(player_index, reason)
         sprite = "utility/brush_square_shape",
         style = "tool_button",
         handler = handlers.select_tool_rect,
-        tooltip = "Rectangle tool - Use reverse/alt selection to erase zones."
+        tooltip = {"tooltips.tooltip-rect"}
+      },
+      {
+        type = "sprite-button",
+        name = "zp_tool_pipette",
+        sprite = "utility/color_picker",
+        style = "tool_button",
+        handler = handlers.pipette,
+        enabled = false,
+        tooltip = {"tooltips.tooltip-pipette"}
       }
     }
   })
@@ -524,7 +406,7 @@ function ui.rebuild_player(player_index, reason)
   end
   local force_index = player.force.index
   local f = backend.get_force(force_index)
-  local selected_id = (storage and storage.zp_ui and storage.zp_ui.players and storage.zp_ui.players[player_index] and storage.zp_ui.players[player_index].selected_zone_id) or 0
+  local selected_id = backend.get_selected_zone_id(player_index) or 0
 
   -- Ensure a valid selection if any zones exist
   if selected_id == 0 or not (f and f.zones and f.zones[selected_id]) then
@@ -537,14 +419,13 @@ function ui.rebuild_player(player_index, reason)
       end
     end
     if first_id then
-      local pstate = ensure_player_ui_state(player_index)
-      pstate.selected_zone_id = first_id
+      backend.set_selected_zone_id(player_index, first_id)
       selected_id = first_id
     end
   end
 
   -- Helper to render a single zone row
-  local function add_zone_row(id, name, color)
+  local function add_zone_row(id, name, color, is_first, is_last)
     local select_name = "zp_zone_select_" .. tostring(id)
     local delete_name = "zp_zone_delete_" .. tostring(id)
     -- Row: selectable button
@@ -563,6 +444,7 @@ function ui.rebuild_player(player_index, reason)
           style_mods = name_style_mods,
           toggled = selected_id == id,
           handler = handlers.zone_row_select,
+          tags = { zone_id = id },
           children = {
             {
               type = "flow",
@@ -597,17 +479,32 @@ function ui.rebuild_player(player_index, reason)
               children = {
                 {
                   type = "sprite-button",
-                  name = ("zp_zone_name_%s"):format(id),
-                  sprite = "utility/rename_icon",
+                  name = ("zp_zone_up_%s"):format(id),
+                  sprite = "zp-up-dark-32",
                   style = "zp_icon_button",
-                  handler = handlers.zone_name_open
+                  tooltip = "Move up. Shift: Move up 5, Control: 50.",
+                  handler = handlers.zone_move_up,
+                  tags = { zone_id = id },
+                  elem_mods = { enabled = not is_first }
                 },
                 {
                   type = "sprite-button",
-                  name = ("zp_zone_color_%s"):format(id),
-                  sprite = "utility/color_picker",
+                  name = ("zp_zone_down_%s"):format(id),
+                  sprite = "zp-down-dark-32",
+                  tooltip = "Move down. Shift: Move down 5, Control: 50.",
                   style = "zp_icon_button",
-                  handler = handlers.zone_color_open
+                  handler = handlers.zone_move_down,
+                  tags = { zone_id = id },
+                  elem_mods = { enabled = not is_last }
+                },
+                {
+                  type = "sprite-button",
+                  name = ("zp_zone_name_%s"):format(id),
+                  sprite = "zp-edit-dark-32",
+                  style = "zp_icon_button",
+                  handler = handlers.zone_edit_open,
+                  tags = { zone_id = id },
+                  tooltip = "Edit zone"
                 },
                 {
                   type = "sprite-button",
@@ -615,7 +512,9 @@ function ui.rebuild_player(player_index, reason)
                   sprite = "utility/trash",
                   style = "zp_icon_button_red",
                   handler = handlers.zone_delete,
-                  elem_mods = { enabled = true }
+                  elem_mods = { enabled = true },
+                  tags = { zone_id = id },
+                  tooltip = "Delete zone"
                 }
               }
             }
@@ -627,10 +526,21 @@ function ui.rebuild_player(player_index, reason)
 
   -- Zones
   if f and f.zones then
+    -- Collect and sort non-empty zones by order
+    local zones_list = {}
     for id, z in pairs(f.zones) do
       if id ~= 0 then
-        add_zone_row(id, z.name, z.color or {r=1,g=1,b=1,a=1})
+        table.insert(zones_list, { id = id, zone = z })
       end
+    end
+    table.sort(zones_list, function(a, b) return a.zone.order < b.zone.order end)
+    
+    for idx, entry in ipairs(zones_list) do
+      local id = entry.id
+      local z = entry.zone
+      local is_first = (idx == 1)
+      local is_last = (idx == #zones_list)
+      add_zone_row(id, z.name, z.color or {r=1,g=1,b=1,a=1}, is_first, is_last)
     end
   end
 
@@ -662,7 +572,12 @@ ui.events = {}
 function handlers.toggle_main_frame(e)
   local player = game.get_player(e.player_index)
   if player then
-    toggle_main_frame(player)
+    local frame = ensure_main_frame(player)
+    frame.visible = not frame.visible
+    -- Enable alt mode when opening UI
+    if frame.visible then
+      player.game_view_settings.show_entity_info = true
+    end
   end
 end
 
@@ -670,47 +585,15 @@ function handlers.properties_open(e)
   local player = game.get_player(e.player_index)
   if not player then return end
   local g = backend.get_grid(player.force.index)
-  create_dialog(player, {
+  dialog.create(player, {
     name = "zp_properties_dialog",
     title = "Properties",
-    confirm_name = "zp_prop_confirm",
-    cancel_name = "zp_prop_cancel",
-    confirm_handler = handlers.prop_confirm,
-    cancel_handler = handlers.prop_cancel,
-    parent = player.gui.center,
+    location = e.cursor_display_location,
     children = {
-      {
-        type = "flow", direction = "horizontal",
-        children = {
-          { type = "label", caption = "Width" },
-          { type = "empty-widget", style_mods = { minimal_width = 8, horizontally_stretchable = true } },
-          { type = "textfield", name = "zp_prop_width", text = tostring(g.width or 32), style_mods = { width = 100} }
-        }
-      },
-      {
-        type = "flow", direction = "horizontal",
-        children = {
-          { type = "label", caption = "Height" },
-          { type = "empty-widget", style_mods = { minimal_width = 8, horizontally_stretchable = true } },
-          { type = "textfield", name = "zp_prop_height", text = tostring(g.height or 32), style_mods = { width = 100} }
-        }
-      },
-      {
-        type = "flow", direction = "horizontal",
-        children = {
-          { type = "label", caption = "X offset" },
-          { type = "empty-widget", style_mods = { minimal_width = 8, horizontally_stretchable = true } },
-          { type = "textfield", name = "zp_prop_x_offset", text = tostring(g.x_offset or 0), style_mods = { width = 100} }
-        }
-      },
-      {
-        type = "flow", direction = "horizontal",
-        children = {
-          { type = "label", caption = "Y offset" },
-          { type = "empty-widget", style_mods = { minimal_width = 8, horizontally_stretchable = true } },
-          { type = "textfield", name = "zp_prop_y_offset", text = tostring(g.y_offset or 0), style_mods = { width = 100} }
-        }
-      },
+      labeled_textfield("Width", "zp_prop_width", g.width or 32),
+      labeled_textfield("Height", "zp_prop_height", g.height or 32),
+      labeled_textfield("X offset", "zp_prop_x_offset", g.x_offset or 0),
+      labeled_textfield("Y offset", "zp_prop_y_offset", g.y_offset or 0),
       { type = "checkbox", name = "zp_prop_reproject", state = false, caption = "Reproject existing cells" }
     }
   })
@@ -720,14 +603,10 @@ function handlers.visibility_open(e)
   local player = game.get_player(e.player_index)
   if not player then return end
   local idx = backend.get_boundary_opacity_index and backend.get_boundary_opacity_index(player.index) or 0
-  local dlg = create_dialog(player, {
+  local dlg = dialog.create(player, {
     name = "zp_visibility_dialog",
     title = "Visibility",
-    confirm_name = "zp_visibility_confirm",
-    cancel_name = "zp_visibility_cancel",
-    confirm_handler = handlers.visibility_confirm,
-    cancel_handler = handlers.visibility_cancel,
-    parent = player.gui.center,
+    location = e.cursor_display_location,
     children = {
       {
         type = "flow",
@@ -740,7 +619,7 @@ function handlers.visibility_open(e)
             sprite = "utility/backward_arrow",
             style = "zp_icon_button",
             handler = handlers.visibility_lower,
-            tooltip = "[font=default-bold]Decrease visibility[/font]\n[img=utility/enter] Ctrl+Shift+S"
+            tooltip = {"tooltips.tooltip-visibility-decrease"}
           },
           {
             type = "label",
@@ -754,7 +633,7 @@ function handlers.visibility_open(e)
             sprite = "utility/forward_arrow",
             style = "zp_icon_button",
             handler = handlers.visibility_higher,
-            tooltip = "[font=default-bold]Increase visibility[/font]\n[img=utility/enter] Ctrl+Shift+W"
+            tooltip = {"tooltips.tooltip-visibility-increase"}
           }
         }
       }
@@ -774,7 +653,7 @@ local function adjust_visibility_level(player_index, delta)
   end
   local player = game.get_player(player_index)
   if not player then return end
-  local dlg = player.gui.center["zp_visibility_dialog"]
+  local dlg = player.gui.screen["zp_visibility_dialog"]
   if dlg and dlg.valid then
     dlg.tags = { visibility_index = new_idx }
     update_visibility_label(dlg, new_idx)
@@ -789,40 +668,6 @@ function handlers.visibility_higher(e)
   adjust_visibility_level(e.player_index, 1)
 end
 
-handlers.visibility_cancel = make_cancel_handler({ dialog_name = "zp_visibility_dialog", get_parent = function(p) return p.gui.center end })
-
-handlers.visibility_confirm = make_confirm_handler({
-  dialog_name = "zp_visibility_dialog",
-  get_parent = function(p) return p.gui.center end,
-  on_confirm = function(e, dlg, player)
-    local idx = dlg.tags and tonumber(dlg.tags.visibility_index)
-    backend.set_player_visibility(player.index, { index = idx })
-  end
-})
-
-handlers.prop_cancel = make_cancel_handler({ dialog_name = "zp_properties_dialog", get_parent = function(p) return p.gui.center end })
-
-handlers.prop_confirm = make_confirm_handler({
-  dialog_name = "zp_properties_dialog",
-  get_parent = function(p) return p.gui.center end,
-  on_confirm = function(e, dlg, player)
-    local g = backend.get_grid(player.force.index)
-    local width_elem = find_child(dlg, "zp_prop_width")
-    local height_elem = find_child(dlg, "zp_prop_height")
-    local x_offset_elem = find_child(dlg, "zp_prop_x_offset")
-    local y_offset_elem = find_child(dlg, "zp_prop_y_offset")
-    local reproject_elem = find_child(dlg, "zp_prop_reproject")
-    local new_props = {
-      width = to_number(width_elem and width_elem.text or "", g.width or 32),
-      height = to_number(height_elem and height_elem.text or "", g.height or 32),
-      x_offset = to_number(x_offset_elem and x_offset_elem.text or "", g.x_offset or 0),
-      y_offset = to_number(y_offset_elem and y_offset_elem.text or "", g.y_offset or 0),
-    }
-    local reproject = (reproject_elem and reproject_elem.state) or false
-    backend.set_grid(player.force.index, player.index, new_props, { reproject = reproject })
-  end
-})
-
 function handlers.undo(e)
   local player = game.get_player(e.player_index)
   if player then
@@ -836,6 +681,14 @@ function handlers.redo(e)
   if player then
     backend.redo(player.index)
     -- UI rebuild triggered by backend notification
+  end
+end
+
+function handlers.close_main_frame(e)
+  local player = game.get_player(e.player_index)
+  if player then
+    local frame = ensure_main_frame(player)
+    frame.visible = false
   end
 end
 
@@ -854,22 +707,17 @@ function handlers.select_tool_rect(e)
   end
   if player.cursor_stack then
     player.cursor_stack.set_stack({ name = tool_name, count = 1 })
-    local pstate = ensure_player_ui_state(player.index)
-    pstate.selected_tool = "rect"
+    backend.set_selected_tool(player.index, "rect")
   end
 end
 
 function handlers.zone_add(e)
   local player = game.get_player(e.player_index)
   if not player then return end
-  local dlg = create_dialog(player, {
+  local dlg = dialog.create(player, {
     name = "zp_zone_dialog",
     title = "Add Zone",
-    confirm_name = "zp_zone_confirm",
-    cancel_name = "zp_zone_cancel",
-    confirm_handler = handlers.zone_confirm,
-    cancel_handler = handlers.zone_cancel,
-    parent = player.gui.center,
+    location = e.cursor_display_location,
     children = {
       {
         type = "flow", direction = "horizontal",
@@ -881,163 +729,114 @@ function handlers.zone_add(e)
       build_color_picker(1, 1, 1, handlers.color_slider_changed)
     }
   })
-  dlg.tags = { mode = "add" }
+  dlg.tags = { color_r = 255, color_g = 255, color_b = 255 }
 end
 
-handlers.zone_cancel = make_cancel_handler({ dialog_name = "zp_zone_dialog", get_parent = function(p) return p.gui.center end })
-
-handlers.zone_confirm = make_confirm_handler({
-  dialog_name = "zp_zone_dialog",
-  get_parent = function(p) return p.gui.center end,
-  on_confirm = function(e, dlg, player)
-    local name_elem = find_child(dlg, "zp_zone_name")
-    local name = name_elem and name_elem.text or ""
-    local r_elem = find_child(dlg, "zp_color_r")
-    local g_elem = find_child(dlg, "zp_color_g")
-    local b_elem = find_child(dlg, "zp_color_b")
-    local r = (r_elem and r_elem.slider_value)
-    local g = (g_elem and g_elem.slider_value)
-    local b = (b_elem and b_elem.slider_value)
-    local color = { r = r/255, g = g/255, b = b/255, a = 1 }
-    backend.add_zone(player.force.index, player.index, name, color)
-  end
-})
-
-function handlers.zone_name_open(e)
+function handlers.zone_edit_open(e)
   local player = game.get_player(e.player_index)
   if not player then return end
-  local id = extract_zone_id(e.element.name, "^zp_zone_name_(%d+)$")
+  local id = e.element.tags and tonumber(e.element.tags.zone_id)
   if not id then return end
   local f = backend.get_force(player.force.index)
   local z = f.zones[id]
-  local dlg = create_dialog(player, {
-    name = "zp_zone_name_dialog",
-    title = "Edit Zone Name",
-    confirm_name = "zp_name_confirm",
-    cancel_name = "zp_name_cancel",
-    confirm_handler = handlers.name_confirm,
-    cancel_handler = handlers.name_cancel,
-    parent = player.gui.center,
+  if not z then return end
+  local col = z.color or {r=1,g=1,b=1,a=1}
+  local dlg = dialog.create(player, {
+    name = "zp_zone_dialog",
+    title = "Edit Zone",
+    location = e.cursor_display_location,
     children = {
       {
         type = "flow", direction = "horizontal",
         children = {
-          { type = "label", caption = "Name" },
-          { type = "textfield", name = "zp_zone_name_field", text = z and z.name or "", icon_selector = true }
+          { type = "label", caption = "Name", style_mods = { top_padding = 4}},
+          { type = "textfield", name = "zp_zone_name", text = z.name or "", icon_selector = true }
         }
-      }
-    }
-  })
-  dlg.tags = { zone_id = id }
-end
-
-function handlers.zone_color_open(e)
-  local player = game.get_player(e.player_index)
-  if not player then return end
-  local id = extract_zone_id(e.element.name, "^zp_zone_color_(%d+)$")
-  if not id then return end
-  local f = backend.get_force(player.force.index)
-  local z = f.zones[id]
-  local col = z and z.color or {r=1,g=1,b=1,a=1}
-  local dlg = create_dialog(player, {
-    name = "zp_zone_color_dialog",
-    title = "Edit Zone Color",
-    confirm_name = "zp_color_confirm",
-    cancel_name = "zp_color_cancel",
-    confirm_handler = handlers.color_confirm,
-    cancel_handler = handlers.color_cancel,
-    parent = player.gui.center,
-    children = {
+      },
       build_color_picker(col.r, col.g, col.b, handlers.color_slider_changed)
     }
   })
-  dlg.tags = { zone_id = id }
+  dlg.tags = { zone_id = id, color_r = math.floor(col.r * 255), color_g = math.floor(col.g * 255), color_b = math.floor(col.b * 255) }
 end
 
 function handlers.zone_delete(e)
   local player = game.get_player(e.player_index)
   if not player then return end
-  local id = extract_zone_id(e.element.name, "^zp_zone_delete_(%d+)$")
+  local id = e.element.tags and tonumber(e.element.tags.zone_id)
   if not id then return end
   backend.delete_zone(player.force.index, player.index, id, 0)
   -- UI rebuild triggered by backend notification
 end
-
-handlers.name_cancel = make_cancel_handler({ dialog_name = "zp_zone_name_dialog", get_parent = function(p) return p.gui.center end })
-
-handlers.name_confirm = make_confirm_handler({
-  dialog_name = "zp_zone_name_dialog",
-  get_parent = function(p) return p.gui.center end,
-  on_confirm = function(e, dlg, player)
-    local zone_id = dlg.tags and tonumber(dlg.tags.zone_id)
-    if not zone_id then 
-      return
-    end
-    local f = backend.get_force(player.force.index)
-    local z = f.zones[zone_id]
-    local name_elem = find_child(dlg, "zp_zone_name_field")
-    local new_name = name_elem and name_elem.text or (z and z.name) or ""
-    local col = z and z.color or {r=1,g=1,b=1,a=1}
-    backend.edit_zone(player.force.index, player.index, zone_id, new_name, col)
-  end
-})
-
-handlers.color_cancel = make_cancel_handler({ dialog_name = "zp_zone_color_dialog", get_parent = function(p) return p.gui.center end })
-
-handlers.color_confirm = make_confirm_handler({
-  dialog_name = "zp_zone_color_dialog",
-  get_parent = function(p) return p.gui.center end,
-  on_confirm = function(e, dlg, player)
-    local zone_id = dlg.tags and tonumber(dlg.tags.zone_id)
-    if not zone_id then 
-      return
-    end
-    local f = backend.get_force(player.force.index)
-    local z = f.zones[zone_id]
-    local r_elem = find_child(dlg, "zp_color_r")
-    local g_elem = find_child(dlg, "zp_color_g")
-    local b_elem = find_child(dlg, "zp_color_b")
-    local r = (r_elem and r_elem.slider_value) or 255
-    local g = (g_elem and g_elem.slider_value) or 255
-    local b = (b_elem and b_elem.slider_value) or 255
-    local color = { r = r/255, g = g/255, b = b/255, a = (z and z.color and z.color.a) or 1 }
-    local name = z and z.name or ""
-    backend.edit_zone(player.force.index, player.index, zone_id, name, color)
-  end
-})
 
 function handlers.color_slider_changed(e)
   local player = game.get_player(e.player_index)
   if not player then return end
   local element = e.element
   if not element or not element.valid then return end
-  if element.name ~= "zp_color_r" and element.name ~= "zp_color_g" and element.name ~= "zp_color_b" then
+  local dlg = player.gui.screen["zp_zone_dialog"]
+  if not dlg or not dlg.valid then return end
+  
+  -- Update tags based on which slider changed
+  local tags = dlg.tags or {}
+  if element.name == "zp_color_r" then
+    tags.color_r = element.slider_value
+  elseif element.name == "zp_color_g" then
+    tags.color_g = element.slider_value
+  elseif element.name == "zp_color_b" then
+    tags.color_b = element.slider_value
+  else
     return
   end
-  local center = player.gui.center
-  local dlg = center["zp_zone_dialog"]
-  if dlg and dlg.valid then
-    update_color_preview_for_dialog(dlg)
-    return
-  end
-  dlg = center["zp_zone_color_dialog"]
-  if dlg and dlg.valid then
-    update_color_preview_for_dialog(dlg)
-  end
+  dlg.tags = tags
+  
+  -- Update preview
+  update_color_preview(dlg, "zp_color_preview", "zp_color_r", "zp_color_g", "zp_color_b")
 end
 
 function handlers.zone_row_select(e)
   local player = game.get_player(e.player_index)
   if not player then return end
-  local id = extract_zone_id(e.element.name, "^zp_zone_select_(%d+)$")
+  local id = e.element.tags and tonumber(e.element.tags.zone_id)
   if not id then return end
-  local pstate = ensure_player_ui_state(player.index)
-  pstate.selected_zone_id = id
+  backend.set_selected_zone_id(player.index, id)
   -- Rebuild to update selection highlight immediately
   ui.rebuild_player(player.index, "zone-selected")
 end
 
--- Register all handlers with flib (for future use with flib_gui.add)
+function handlers.zone_move_up(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local id = e.element.tags and tonumber(e.element.tags.zone_id)
+  if not id then return end
+    local value = 1
+  if e.shift then
+    value = 5
+  end
+  if e.control then
+    value = 50
+  end
+
+  backend.move_zone(player.force.index, player.index, id, -value)
+  -- UI rebuild triggered by backend notification
+end
+
+function handlers.zone_move_down(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local id = e.element.tags and tonumber(e.element.tags.zone_id)
+  if not id then return end
+  local value = 1
+  if e.shift then
+    value = 5
+  end
+  if e.control then
+    value = 50
+  end
+  backend.move_zone(player.force.index, player.index, id, value)
+  -- UI rebuild triggered by backend notification
+end
+
+-- Register all handlers with flib
 flib_gui.add_handlers(handlers)
 
 ---Build UI for all current players on init.
@@ -1056,19 +855,9 @@ end
 ui.events["zp-select-rect-tool"] = handlers.select_tool_rect
 ui.events["zp-visibility-increase"] = handlers.visibility_higher
 ui.events["zp-visibility-decrease"] = handlers.visibility_lower
-
--- GUI event routing - flib handles almost everything via tags
--- We only need to route the toggle button (created by mod-gui, not flib)
-function ui.events.on_gui_click(event)
-  local element = event.element
-  if not element or not element.valid then return end
-  
-  -- Toggle button (created by mod-gui, not flib)
-  if element.name == TOGGLE_BUTTON_NAME then
-    handlers.toggle_main_frame(event)
-  end
-  -- All other buttons are handled by flib via tags
-end
+ui.events["zp-undo"] = handlers.undo
+ui.events["zp-redo"] = handlers.redo
+ui.events["zp-pipette"] = handlers.pipette
 
 -- Handle escape key on dialogs
 function ui.events.on_gui_closed(event)
@@ -1076,15 +865,8 @@ function ui.events.on_gui_closed(event)
   if not player or not player.valid then return end
   
   -- When player presses escape on a dialog, close it
-  local parent = player.gui.center
-  local dialog_names = {
-    "zp_properties_dialog",
-    "zp_zone_dialog",
-    "zp_zone_name_dialog",
-    "zp_zone_color_dialog",
-    "zp_visibility_dialog",
-  }
-  for _, name in pairs(dialog_names) do
+  local parent = player.gui.screen
+  for _, name in ipairs(dialog.get_all_names()) do
     local dlg = parent[name]
     if dlg and dlg.valid then
       dlg.destroy()
@@ -1097,23 +879,16 @@ function ui.events.on_gui_confirmed(event)
   local player = game.get_player(event.player_index)
   if not player or not player.valid then return end
   
-  -- When player presses enter on a dialog, confirm it
-  local parent = player.gui.center
-  
-  -- Map dialog names to their confirm handlers
-  local dialog_handlers = {
-    zp_properties_dialog = handlers.prop_confirm,
-    zp_zone_dialog = handlers.zone_confirm,
-    zp_zone_name_dialog = handlers.name_confirm,
-    zp_zone_color_dialog = handlers.color_confirm,
-    zp_visibility_dialog = handlers.visibility_confirm,
-  }
-  
-  for dialog_name, confirm_handler in pairs(dialog_handlers) do
-    local dlg = parent[dialog_name]
+  -- When player presses enter on a dialog, call its confirm handler and close it
+  local parent = player.gui.screen
+  for _, name in ipairs(dialog.get_all_names()) do
+    local dlg = parent[name]
     if dlg and dlg.valid then
-      -- Call the confirm handler
-      confirm_handler({ player_index = event.player_index, element = dlg })
+      local registry_entry = dialog.get_registry(name)
+      if registry_entry and registry_entry.on_confirm then
+        registry_entry.on_confirm(dlg, player)
+        dlg.destroy()
+      end
       return
     end
   end

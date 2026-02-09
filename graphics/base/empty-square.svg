@@ -2,14 +2,14 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
-   width="512"
+   width="1536"
    height="512"
-   viewBox="0 0 135.46667 135.46667"
+   viewBox="0 0 406.40001 135.46667"
    version="1.1"
    id="svg1"
    inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
    sodipodi:docname="empty-square.svg"
-   inkscape:export-filename="empty-square-20.png"
+   inkscape:export-filename="empty-square.png"
    inkscape:export-xdpi="96"
    inkscape:export-ydpi="96"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
@@ -27,9 +27,9 @@
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
      showgrid="true"
-     inkscape:zoom="1"
-     inkscape:cx="252.5"
-     inkscape:cy="323.5"
+     inkscape:zoom="0.84114583"
+     inkscape:cx="768"
+     inkscape:cy="445.22601"
      inkscape:window-width="1920"
      inkscape:window-height="1009"
      inkscape:window-x="-8"
@@ -59,7 +59,15 @@
      id="layer1">
     <path
        id="rect1"
-       style="fill:#ffffff;stroke-width:0.26458333;fill-opacity:0.19607843;stroke-dasharray:none"
-       d="M 0 0 L 0 135.46667 L 135.46667 135.46667 L 135.46667 0 L 0 0 z M 25.4 25.4 L 110.06667 25.4 L 110.06667 110.06667 L 25.4 110.06667 L 25.4 25.4 z " />
+       style="fill:#ffffff;fill-opacity:0.09776536;stroke-width:0.264583;stroke-dasharray:none"
+       d="M 0,0 V 135.46667 H 135.46667 V 0 Z m 25.4,25.4 h 84.66667 v 84.66667 H 25.4 Z" />
+    <path
+       id="path1"
+       style="fill:#ffffff;fill-opacity:0.196078;stroke-width:0.264583;stroke-dasharray:none"
+       d="M 135.46667,0 V 135.46667 H 270.93334 V 0 Z m 25.4,25.4 h 84.66667 v 84.66667 h -84.66667 z" />
+    <path
+       id="path2"
+       style="fill:#ffffff;fill-opacity:0.39944133;stroke-width:0.264583;stroke-dasharray:none"
+       d="M 270.93334,0 V 135.46667 H 406.40001 V 0 Z m 25.4,25.4 h 84.66667 v 84.66667 h -84.66667 z" />
   </g>
 </svg>

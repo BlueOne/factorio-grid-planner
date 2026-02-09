@@ -1,12 +1,12 @@
 {
 	"name": "zone-planner",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"title": "Zone Planner",
 	"author": "unique2",
 	"dependencies": [
     "base >= 2.0.0",
     "flib >= 0.16.5"
 	],
-	"description": "Plan out base geometry by assigning chunks to zones. Visualize zone assignments with an overlay. ",
+	"description": "Plan out base geometry and reserve space by assigning chunks to zones. Basically paint on the map on a large grid. ",
 	"factorio_version": "2.0"
 }

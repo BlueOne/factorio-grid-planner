@@ -65,6 +65,24 @@ local hotkeys = {
     key_sequence = "CONTROL + SHIFT + S",
     consuming = "game-only"
   },
+  {
+    type = "custom-input",
+    name = "zp-undo",
+    key_sequence = "CONTROL + ALT + Z",
+    consuming = "game-only"
+  },
+  {
+    type = "custom-input",
+    name = "zp-redo",
+    key_sequence = "CONTROL + ALT + R",
+    consuming = "game-only"
+  },
+  {
+    type = "custom-input",
+    name = "zp-pipette",
+    key_sequence = "CONTROL + SHIFT + Q",
+    consuming = "game-only"
+  },
 }
 
 data:extend(hotkeys)
