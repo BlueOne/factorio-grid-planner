@@ -60,16 +60,16 @@ local function version_greater(v1, v2)
 end
 
 function Migrations.on_configuration_changed(event)
-  if not event or not event.mod_changes or not event.mod_changes["zone-planner"] then return end
-  local old_version = event.mod_changes["zone-planner"].old_version or "0.0.0"
-  local new_version = event.mod_changes["zone-planner"].new_version
+  if not event or not event.mod_changes or not event.mod_changes["grid-planner"] then return end
+  local old_version = event.mod_changes["grid-planner"].old_version or "0.0.0"
+  local new_version = event.mod_changes["grid-planner"].new_version
   if new_version == old_version or new_version == nil then return end
 
   -- run all migration functions between old_version (exclusive) and new_version (inclusive)
   for v, f in pairs(Migrations.migration_functions) do
     if (not version_greater(old_version, v)) and version_greater(new_version, v) then
       log("Running migration for version " .. v)
-      game.print("[Zone-Planner]: Running migration for version " .. v)
+      game.print("[Grid-Planner]: Running migration for version " .. v)
       f()
     end
   end

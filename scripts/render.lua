@@ -1,5 +1,4 @@
--- Renderer for Zone Planner
--- Draws per-cell overlays using Factorio rendering API, tinted by zone color.
+-- Draws per-cell overlays using Factorio rendering API, tinted by region color.
 
 local render = {}
 
@@ -7,50 +6,50 @@ local backend = require("scripts/backend")
 
 
 local CENTER_SPRITES = {
-  [1] = "zp-empty-square-0",
-  [2] = "zp-empty-square-1",
-  [3] = "zp-empty-square-2",
+  [1] = "gp-empty-square-0",
+  [2] = "gp-empty-square-1",
+  [3] = "gp-empty-square-2",
 }
 
 local CORNER_SPRITES = {
-  [1] = { "zp-corner-0-0", "zp-corner-0-1", "zp-corner-0-2", "zp-corner-0-3" },
-  [2] = { "zp-corner-1-0", "zp-corner-1-1", "zp-corner-1-2", "zp-corner-1-3" },
-  [3] = { "zp-corner-2-0", "zp-corner-2-1", "zp-corner-2-2", "zp-corner-2-3" },
+  [1] = { "gp-corner-0-0", "gp-corner-0-1", "gp-corner-0-2", "gp-corner-0-3" },
+  [2] = { "gp-corner-1-0", "gp-corner-1-1", "gp-corner-1-2", "gp-corner-1-3" },
+  [3] = { "gp-corner-2-0", "gp-corner-2-1", "gp-corner-2-2", "gp-corner-2-3" },
 }
 
 -- Data Layout
 -------------------------------------------------------------------------------
 
----@class ZP.RenderStorageRoot
----@field forces table<uint, ZP.RenderForceState>  -- by force_index
+---@class GP.RenderStorageRoot
+---@field forces table<uint, GP.RenderForceState>  -- by force_index
 
----@class ZP.RenderObject
+---@class GP.RenderObject
 ---@field game LuaRenderObject|nil
 ---@field chart LuaRenderObject|nil
 
----@class ZP.RenderCorner
+---@class GP.RenderCorner
 ---@field quadrants_mask uint  -- bitmask of covered quadrants: 1=top-left, 2=top-right, 4=bottom-left, 8=bottom-right
----@field zone_id uint  -- zone ID for coloring
+---@field region_id uint  -- region ID for coloring
 ---@field orientation number
 ---@field sprite_index uint
----@field variants {[1]: ZP.RenderObject|nil, [2]: ZP.RenderObject|nil, [3]: ZP.RenderObject|nil}
+---@field variants {[1]: GP.RenderObject|nil, [2]: GP.RenderObject|nil, [3]: GP.RenderObject|nil}
 
----@class ZP.RenderCell
----@field zone_id uint|nil
+---@class GP.RenderCell
+---@field region_id uint|nil
 ---@field x_scale number|nil
 ---@field y_scale number|nil
----@field variants {[1]: ZP.RenderObject|nil, [2]: ZP.RenderObject|nil, [3]: ZP.RenderObject|nil}
+---@field variants {[1]: GP.RenderObject|nil, [2]: GP.RenderObject|nil, [3]: GP.RenderObject|nil}
 
----@class ZP.RenderSurfaceState
----@field cells table<string, ZP.RenderCell>
----@field corners table<string, ZP.RenderCorner[]>
+---@class GP.RenderSurfaceState
+---@field cells table<string, GP.RenderCell>
+---@field corners table<string, GP.RenderCorner[]>
 
----@class ZP.RenderForceState
----@field surfaces table<uint, ZP.RenderSurfaceState>  -- surface_index -> surface state
+---@class GP.RenderForceState
+---@field surfaces table<uint, GP.RenderSurfaceState>  -- surface_index -> surface state
 
 local function ensure_state()
-  storage.zp_render = storage.zp_render or { forces = {} }
-  return storage.zp_render
+  storage.gp_render = storage.gp_render or { forces = {} }
+  return storage.gp_render
 end
 
 local function ensure_force_state(force_index)
@@ -104,20 +103,20 @@ end
 ---@param force_index uint
 ---@param surface_index uint
 ---@param key string
----@param zone_id uint|nil
-local function draw_cell(force_index, surface_index, key, zone_id)
+---@param region_id uint|nil
+local function draw_cell(force_index, surface_index, key, region_id)
   local surf = ensure_surface_state(force_index, surface_index)
   local cell = surf.cells[key]
 
   local surface = game.get_surface(surface_index) --[[@as LuaSurface]]
   local g = backend.get_grid(force_index)
-  local zones = backend.get_zones(force_index)
-  local zone = zone_id and zones[zone_id] or nil
+  local regions = backend.get_regions(force_index)
+  local region = region_id and regions[region_id] or nil
   local cx, cy = shared.parse_cell_key(key)
   local lt, rb = cell_bounds(g, cx, cy)
   local center_pos = { x = (lt.x + rb.x) / 2, y = (lt.y + rb.y) / 2 }
 
-  if not zone then
+  if not region then
     if cell then
       destroy_cell_render(cell)
       surf.cells[key] = nil
@@ -125,12 +124,12 @@ local function draw_cell(force_index, surface_index, key, zone_id)
     return
   end
 
-  local color = zone.color
+  local color = region.color
   local x_scale = g.width / 16
   local y_scale = g.height / 16
 
   -- Optimization: if cell exists with same geometry, just update color
-  if cell and cell.x_scale == x_scale and cell.y_scale == y_scale and cell.zone_id == zone_id then
+  if cell and cell.x_scale == x_scale and cell.y_scale == y_scale and cell.region_id == region_id then
     -- Only update colors on all variants
     for idx = 1, 3 do
       local variant = cell.variants[idx]
@@ -142,7 +141,7 @@ local function draw_cell(force_index, surface_index, key, zone_id)
     return
   end
 
-  -- Cell geometry changed or zone changed, destroy and recreate
+  -- Cell geometry changed or region changed, destroy and recreate
   if cell then
     destroy_cell_render(cell)
   end
@@ -185,7 +184,7 @@ local function draw_cell(force_index, surface_index, key, zone_id)
   end
 
   surf.cells[key] = {
-    zone_id = zone_id,
+    region_id = region_id,
     x_scale = x_scale,
     y_scale = y_scale,
     variants = variants,
@@ -300,7 +299,7 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
   local mask = {}
   local mask_active_render = {}
 
-  -- Create map zone_id -> bitmask of quadrants for new data
+  -- Create map region_id -> bitmask of quadrants for new data
   local top_left_cell = backend.get_from_image(image, x, y)
   local top_right_cell = backend.get_from_image(image, x + 1, y)
   local bottom_left_cell = backend.get_from_image(image, x, y + 1)
@@ -327,9 +326,9 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
 
   if existing_corners then
     for _, c in pairs(existing_corners) do
-      mask_active_render[c.zone_id] = c.quadrants_mask
+      mask_active_render[c.region_id] = c.quadrants_mask
       count_existing = count_existing + 1
-      if mask[c.zone_id] ~= c.quadrants_mask then
+      if mask[c.region_id] ~= c.quadrants_mask then
         match = false; break
       end
     end
@@ -338,10 +337,10 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
   end
 
 
-  -- Check if there are new zones that weren't there before
+  -- Check if there are new regions that weren't there before
   if match then
-    for zone_id, mask in pairs(mask) do
-      if mask_active_render[zone_id] ~= mask then
+    for region_id, mask in pairs(mask) do
+      if mask_active_render[region_id] ~= mask then
         match = false; break
       end
     end
@@ -364,14 +363,14 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
   local x_scale = grid.width / 8
   local y_scale = grid.height / 8
   local target_position = { x = world_x, y = world_y }
-  local zones = backend.get_zones(force_index)
-  for zone_id, mask in pairs(mask) do
+  local regions = backend.get_regions(force_index)
+  for region_id, mask in pairs(mask) do
     local sprite_index, orientation = quadrants_mask_to_sprite_and_rotation(mask)
 
     if sprite_index then
       local corner = {
         quadrants_mask = mask,
-        zone_id = zone_id,
+        region_id = region_id,
         orientation = orientation,
         sprite_index = sprite_index,
         variants = {},
@@ -385,7 +384,7 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
           game = rendering.draw_sprite{
             sprite = CORNER_SPRITES[idx][sprite_index + 1],
             surface = surface_index,
-            tint = zones[zone_id].color,
+            tint = regions[region_id].color,
             target = target_position,
             x_scale = x_scale,
             y_scale = y_scale,
@@ -398,7 +397,7 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
           chart = rendering.draw_sprite{
             sprite = CORNER_SPRITES[idx][sprite_index + 1],
             surface = surface_index,
-            tint = zones[zone_id].color,
+            tint = regions[region_id].color,
             target = target_position,
             x_scale = x_scale,
             y_scale = y_scale,
@@ -468,7 +467,7 @@ local function rebuild_surface(force_index, surface_index)
     surf.corners[key] = nil
   end
 
-  local f = storage.zp.forces[force_index]
+  local f = storage.gp.forces[force_index]
   if not f then return end
   local img = f.images[surface_index]
   
@@ -477,9 +476,9 @@ local function rebuild_surface(force_index, surface_index)
   
   -- Redraw all cells with all variants
   local cells = (img and img.cells) or {}
-  for key, zone_id in pairs(cells) do
-    if zone_id then
-      draw_cell(force_index, surface_index, key, zone_id)
+  for key, region_id in pairs(cells) do
+    if region_id then
+      draw_cell(force_index, surface_index, key, region_id)
       update_cell_visibility(force_index, surface_index, key, players_by_level)
     end
   end
@@ -509,11 +508,11 @@ end
 ---@param force_index uint
 ---@param surface_index uint
 ---@param changed table<string, boolean>|nil  -- set of cell keys affected; nil implies unknown/many
----@param new_zone_id uint|nil               -- new zone id if uniform, or nil for eraser/mixed
-function render.on_cells_changed(force_index, surface_index, changed, new_zone_id)
-  if not storage or not storage.zp then return end
+---@param new_region_id uint|nil               -- new region id if uniform, or nil for eraser/mixed
+function render.on_cells_changed(force_index, surface_index, changed, new_region_id)
+  if not storage or not storage.gp then return end
   if not changed then
-    -- Full refresh (e.g., zone delete remap or reproject)
+    -- Full refresh (e.g., region delete remap or reproject)
     rebuild_surface(force_index, surface_index)
     return
   end
@@ -532,8 +531,8 @@ function render.on_cells_changed(force_index, surface_index, changed, new_zone_i
 
   for key, p in pairs(changed) do
     local cx, cy = shared.parse_cell_key(key)
-    local zone_id = img.cells[key]
-    draw_cell(force_index, surface_index, key, zone_id)
+    local region_id = img.cells[key]
+    draw_cell(force_index, surface_index, key, region_id)
     update_cell_visibility(force_index, surface_index, key, players_by_level)
     
     -- Mark the four corners adjacent to this cell
@@ -550,20 +549,20 @@ function render.on_cells_changed(force_index, surface_index, changed, new_zone_i
   end
 end
 
----Notify renderer that zone definitions changed for a force.
+---Notify renderer that region definitions changed for a force.
 ---@param force_index uint
----@param event ZP.ZoneChangeEvent|nil
-function render.on_zones_changed(force_index, event)
+---@param event GP.RegionChangeEvent|nil
+function render.on_regions_changed(force_index, event)
   -- If no event provided, do a full update for backwards compatibility
   if not event then
     -- Full update: update colors for all existing cells across all variants
     local fstate = ensure_force_state(force_index)
-    local zones = backend.get_zones(force_index)
+    local regions = backend.get_regions(force_index)
     for surface_index, surf in pairs(fstate.surfaces) do
       for key, cell in pairs(surf.cells) do
-        local zone = cell.zone_id and zones[cell.zone_id]
-        if zone then
-          local color = zone.color
+        local region = cell.region_id and regions[cell.region_id]
+        if region then
+          local color = region.color
           for idx = 1, 3 do
             local variant = cell.variants[idx]
             if variant then
@@ -581,29 +580,29 @@ function render.on_zones_changed(force_index, event)
   local event_type = event.type
   
   -- Events we ignore (no rendering updates needed)
-  if event_type == "zone-name-modified" or 
-     event_type == "zone-order-changed" or 
-     event_type == "zone-added" then
+  if event_type == "region-name-modified" or 
+     event_type == "region-order-changed" or 
+     event_type == "region-added" then
     return
   end
   
-  -- Zone deleted: destroy all render objects for this zone
-  if event_type == "zone-deleted" then
+  -- region deleted: destroy all render objects for this region
+  if event_type == "region-deleted" then
     local fstate = ensure_force_state(force_index)
-    local deleted_zone_id = event.zone_id
+    local deleted_region_id = event.region_id
     for surface_index, surf in pairs(fstate.surfaces) do
       for key, cell in pairs(surf.cells) do
-        if cell.zone_id == deleted_zone_id then
+        if cell.region_id == deleted_region_id then
           destroy_cell_render(cell)
           surf.cells[key] = nil
         end
       end
-      -- Also remove any corner renderers that belonged to the deleted zone
+      -- Also remove any corner renderers that belonged to the deleted region
       for corner_key, corner_list in pairs(surf.corners) do
         local i = 1
         while corner_list and i <= #corner_list do
           local corner = corner_list[i]
-          if corner and corner.zone_id == deleted_zone_id then
+          if corner and corner.region_id == deleted_region_id then
             destroy_corner_render(corner)
             table.remove(corner_list, i)
           else
@@ -618,19 +617,19 @@ function render.on_zones_changed(force_index, event)
     return
   end
   
-  -- Zone modified: update colors for cells using this zone
-  if event_type == "zone-modified" then
+  -- region modified: update colors for cells using this region
+  if event_type == "region-modified" then
     local fstate = ensure_force_state(force_index)
-    local zones = backend.get_zones(force_index)
-    local modified_zone_id = event.zone_id
-    local zone = zones[modified_zone_id]
+    local regions = backend.get_regions(force_index)
+    local modified_region_id = event.region_id
+    local region = regions[modified_region_id]
     
-    if zone then
-      local color = zone.color
+    if region then
+      local color = region.color
       for surface_index, surf in pairs(fstate.surfaces) do
-        -- Update colors for all cells using this zone
+        -- Update colors for all cells using this region
         for key, cell in pairs(surf.cells) do
-          if cell.zone_id == modified_zone_id then
+          if cell.region_id == modified_region_id then
             for idx = 1, 3 do
               local variant = cell.variants[idx]
               if variant then
@@ -641,10 +640,10 @@ function render.on_zones_changed(force_index, event)
           end
         end
 
-        -- Update colors for all corner sprites using this zone
+        -- Update colors for all corner sprites using this region
         for corner_key, corner_list in pairs(surf.corners) do
           for _, corner in pairs(corner_list) do
-            if corner.zone_id == modified_zone_id then
+            if corner.region_id == modified_region_id then
               for idx = 1, 3 do
                 local variant = corner.variants[idx]
                 if variant then
@@ -662,12 +661,12 @@ function render.on_zones_changed(force_index, event)
   
   -- Unknown event type: fall back to full update
   local fstate = ensure_force_state(force_index)
-  local zones = backend.get_zones(force_index)
+  local regions = backend.get_regions(force_index)
   for surface_index, surf in pairs(fstate.surfaces) do
     for key, cell in pairs(surf.cells) do
-      local zone = cell.zone_id and zones[cell.zone_id]
-      if zone then
-        local color = zone.color
+      local region = cell.region_id and regions[cell.region_id]
+      if region then
+        local color = region.color
         for idx = 1, 3 do
           local variant = cell.variants[idx]
           if variant then

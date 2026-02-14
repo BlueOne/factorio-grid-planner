@@ -1,12 +1,12 @@
 {
-	"name": "zone-planner",
+	"name": "grid-planner",
 	"version": "0.1.1",
-	"title": "Zone Planner",
+	"title": "Grid Planner",
 	"author": "unique2",
 	"dependencies": [
     "base >= 2.0.0",
     "flib >= 0.16.5"
 	],
-	"description": "Plan out base geometry and reserve space by assigning chunks to zones. Basically paint on the map on a large grid. ",
+	"description": "Plan out base geometry and reserve space by assigning chunks to zones. Basically a pixel art editor overlaid on the factorio map, on a large grid, intended for planning factory layouts. ",
 	"factorio_version": "2.0"
 }

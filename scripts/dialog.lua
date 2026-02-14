@@ -1,8 +1,4 @@
--- Dialog system module for Zone Planner
--- Provides a centralized dialog registry and generic handler system
-
-
---- Dialog system for Zone Planner
+-- Dialog system module
 --- Provides a centralized dialog registry and generic handler system to simplify creating and managing dialogs across the mod. Dialogs are defined by registering a name and handlers, then created with a standard structure (header, content, confirm button) using the registered name to link them together. The system handles confirming and canceling dialogs and ensuring only one dialog can be open at a time. As usual in factorio gui, you can pass custom data (primitive types) through tags.
 ---
 --- Usage Example:
@@ -179,7 +175,7 @@ function dialog.create(player, opts)
           type = "sprite-button",
           name = opts.name .. "_confirm",
           sprite = "utility/check_mark",
-          style = "zp_icon_button_green",
+          style = "gp_icon_button_green",
           handler = handlers.dialog_confirm,
           tags = { dialog_name = opts.name }
         }

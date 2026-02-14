@@ -1,53 +1,53 @@
 
--- Zone Planner backend module
+-- Backend module
 -- Persistence follows Factorio's storage table conventions.
 -- Types are annotated for linter assistance.
 
 local backend = {}
 
 --[[
-Persistent state layout (storage.zp)
+Persistent state layout (storage.gp)
 
-storage.zp :: ZP.StorageRoot = {
+storage.gp :: GP.StorageRoot = {
   version: uint,                       -- schema/version marker for migrations
-  forces: table<uint, ZP.ForceState>,  -- by force_index
-  players: table<uint, ZP.PlayerState>,-- by player_index
+  forces: table<uint, GP.ForceState>,  -- by force_index
+  players: table<uint, GP.PlayerState>,-- by player_index
   undo_capacity: uint,                 -- max undo entries per player
 }
 ]]
 
----@class ZP.StorageRoot
+---@class GP.StorageRoot
 ---@field version uint
----@field forces table<uint, ZP.ForceState>
----@field players table<uint, ZP.PlayerState>
+---@field forces table<uint, GP.ForceState>
+---@field players table<uint, GP.PlayerState>
 ---@field undo_capacity uint
 
----@class ZP.Zone
+---@class GP.Region
 ---@field id uint
 ---@field name string
 ---@field color Color
 ---@field order uint
 
----@class ZP.Grid
+---@class GP.Grid
 ---@field width uint
 ---@field height uint
 ---@field x_offset int
 ---@field y_offset int
 
----@class ZP.ForceState
----@field next_zone_id uint
----@field zones table<uint, ZP.Zone>
----@field grid ZP.Grid
+---@class GP.ForceState
+---@field next_region_id uint
+---@field regions table<uint, GP.Region>
+---@field grid GP.Grid
 ---@field images table<uint, {cells: table<string, uint?>}>
 
----@class ZP.PlayerState
----@field selected_zone_id uint
+---@class GP.PlayerState
+---@field selected_region_id uint
 ---@field selected_tool string|nil
 ---@field undo table[]
 ---@field redo table[]
 ---@field boundary_opacity_index uint  -- 0..3 discrete setting for boundary visibility
 
-local EMPTY_ZONE_ID = 0
+local EMPTY_REGION_ID = 0
 local DEFAULT_GRID = {
   width = 8,
   height = 8,
@@ -55,19 +55,19 @@ local DEFAULT_GRID = {
   y_offset = 0,
 }
 
--- Zone change event types
-local ZONE_CHANGE_TYPE = {
-  ADDED = "zone-added",           -- Zone was added
-  DELETED = "zone-deleted",       -- Zone was deleted
-  MODIFIED = "zone-modified",     -- Zone properties changed (name or color)
-  NAME_MODIFIED = "zone-name-modified",  -- Zone name changed specifically
-  ORDER_CHANGED = "zone-order-changed",  -- Zone order changed (renderer can skip rebuild)
+-- Region change event types
+local REGION_CHANGE_TYPE = {
+  ADDED = "region-added",           -- Region was added
+  DELETED = "region-deleted",       -- Region was deleted
+  MODIFIED = "region-modified",     -- Region properties changed (name or color)
+  NAME_MODIFIED = "region-name-modified",  -- Region name changed specifically
+  ORDER_CHANGED = "region-order-changed",  -- Region order changed (renderer can skip rebuild)
 }
 
----@class ZP.ZoneChangeEvent
----@field type string One of ZONE_CHANGE_TYPE values
----@field zone_id uint The zone ID affected
----@field zone_name string The zone name
+---@class GP.RegionChangeEvent
+---@field type string One of REGION_CHANGE_TYPE values
+---@field region_id uint The region ID affected
+---@field region_name string The region name
 ---@field before table|nil Previous state (for modified/deleted)
 ---@field after table|nil New state (for modified)
 
@@ -75,7 +75,7 @@ local ZONE_CHANGE_TYPE = {
 local DEFAULT_OPACITY_INDEX = 2
 local UNDO_CAPACITY = 100
 
-DEFAULT_ZONES = {
+DEFAULT_REGIONS = {
   { name = "Belts", color = {r=1,g=0.8,b=0} },
   { name = "Trains", color = {r=0.9,g=0.8,b=0.7} },
   { name = "Stations", color = {r=0.7,g=0.6,b=0.5} },
@@ -88,30 +88,30 @@ DEFAULT_ZONES = {
   { name = "Utility", color = {r=0.9, g=0.4, b=0.8} },
 }
 
----@return ZP.StorageRoot
+---@return GP.StorageRoot
 local function ensure_storage()
-  if not storage.zp then
-    storage.zp = {
+  if not storage.gp then
+    storage.gp = {
       version = 1,
-      forces = {}, ---@type table<uint, ZP.ForceState>
-      players = {}, ---@type table<uint, ZP.PlayerState>
+      forces = {}, ---@type table<uint, GP.ForceState>
+      players = {}, ---@type table<uint, GP.PlayerState>
       undo_capacity = UNDO_CAPACITY 
-    } ---@type ZP.StorageRoot
+    } ---@type GP.StorageRoot
   end
-  return storage.zp
+  return storage.gp
 end
 
 ---@param force_index uint
----@return ZP.ForceState
+---@return GP.ForceState
 local function ensure_force(force_index)
   ensure_storage()
-  local forces = storage.zp.forces
+  local forces = storage.gp.forces
   local f = forces[force_index]
   if not f then
     f = {
-      next_zone_id = 1, -- 0 reserved for Empty
-      zones = {
-        [EMPTY_ZONE_ID] = { id = EMPTY_ZONE_ID, name = "(Empty)", color = {r=0,g=0,b=0,a=0}, order = 0 },
+      next_region_id = 1, -- 0 reserved for Empty
+      regions = {
+        [EMPTY_REGION_ID] = { id = EMPTY_REGION_ID, name = "(Empty)", color = {r=0,g=0,b=0,a=0}, order = 0 },
       },
       grid = {
         width = DEFAULT_GRID.width,
@@ -122,8 +122,8 @@ local function ensure_force(force_index)
       images = {},
     }
     forces[force_index] = f
-      for _, def in pairs(DEFAULT_ZONES) do
-      backend.add_zone(force_index, 1, def.name, def.color)
+      for _, def in pairs(DEFAULT_REGIONS) do
+      backend.add_region(force_index, 1, def.name, def.color)
     end
 
   end
@@ -144,15 +144,15 @@ function backend.get_surface_image(force_index, surface_index)
 end
 
 ---@param player_index uint
----@return ZP.PlayerState
+---@return GP.PlayerState
 local function ensure_player(player_index)
   ensure_storage()
-  local players = storage.zp.players
+  local players = storage.gp.players
   local p = players[player_index]
   if not p then
     local g = ensure_force(player_index and game.get_player(player_index) and game.get_player(player_index).force.index or 1).grid
     p = {
-      selected_zone_id = EMPTY_ZONE_ID,
+      selected_region_id = EMPTY_REGION_ID,
       selected_tool = nil,
       undo = {},
       redo = {},
@@ -188,20 +188,20 @@ function backend.get_boundary_opacity_index(player_index)
   return p.boundary_opacity_index
 end
 
----Get the selected zone ID for a player
+---Get the selected region ID for a player
 ---@param player_index uint
 ---@return uint
-function backend.get_selected_zone_id(player_index)
+function backend.get_selected_region_id(player_index)
   local p = ensure_player(player_index)
-  return p.selected_zone_id
+  return p.selected_region_id
 end
 
----Set the selected zone ID for a player
+---Set the selected region ID for a player
 ---@param player_index uint
----@param zone_id uint
-function backend.set_selected_zone_id(player_index, zone_id)
+---@param region_id uint
+function backend.set_selected_region_id(player_index, region_id)
   local p = ensure_player(player_index)
-  p.selected_zone_id = zone_id
+  p.selected_region_id = region_id
 end
 
 ---Get the selected tool for a player
@@ -223,22 +223,22 @@ end
 -- Reset helpers --------------------------------------------------------------
 ---Reset backend state for a single force.
 ---@param force_index uint
----@param default_zones boolean|nil  -- if true, ensure_force will re-add defaults on next access
-function backend.reset_force(force_index, default_zones)
+---@param default_regions boolean|nil  -- if true, ensure_force will re-add defaults on next access
+function backend.reset_force(force_index, default_regions)
   ensure_storage()
-  storage.zp.forces[force_index] = nil -- reset
+  storage.gp.forces[force_index] = nil -- reset
 end
 
 ---Reset all backend state (forces, players, undo capacity).
 function backend.reset_all()
-  storage.zp = nil
+  storage.gp = nil
 end
 
 ---Reset a single player state (undo/redo stacks, selections).
 ---@param player_index uint
 function backend.reset_player(player_index)
   ensure_storage()
-  storage.zp.players[player_index] = nil
+  storage.gp.players[player_index] = nil
 end
 
 ---Reset a single surface image map for a force.
@@ -264,37 +264,37 @@ local function parse_cell_key(key)
   return tonumber(sx), tonumber(sy)
 end
 
--- Normalize any zone id to internal storage semantics (nil = Empty)
----@param zone_id uint|nil
+-- Normalize any region id to internal storage semantics (nil = Empty)
+---@param region_id uint|nil
 ---@return uint|nil
-local function normalize_zone_id(zone_id)
-  if zone_id == nil or zone_id == EMPTY_ZONE_ID then return nil end
-  return zone_id
+local function normalize_region_id(region_id)
+  if region_id == nil or region_id == EMPTY_REGION_ID then return nil end
+  return region_id
 end
 
 -- Notifications --------------------------------------------------------------
-local function notify_cells_changed(force_index, surface_index, changed_set, new_zone_id)
+local function notify_cells_changed(force_index, surface_index, changed_set, new_region_id)
   if render and render.on_cells_changed then
-    render.on_cells_changed(force_index, surface_index, changed_set, new_zone_id)
-    -- pcall(render.on_cells_changed, force_index, surface_index, changed_set, new_zone_id)
+    render.on_cells_changed(force_index, surface_index, changed_set, new_region_id)
+    -- pcall(render.on_cells_changed, force_index, surface_index, changed_set, new_region_id)
   end
   if ui and ui.on_backend_changed then
     pcall(ui.on_backend_changed, { kind = "cells-changed", force_index = force_index, surface_index = surface_index })
   end
 end
 
-local function notify_zones_changed(force_index, event)
-  -- event is a ZP.ZoneChangeEvent table with structure: { type = "...", zone_id = ..., zone_name = ..., before = ..., after = ... }
+local function notify_regions_changed(force_index, event)
+  -- event is a GP.RegionChangeEvent table with structure: { type = "...", region_id = ..., region_name = ..., before = ..., after = ... }
   -- If no event provided, default to generic STRUCTURE type (for backwards compatibility)
   if not event then
-    event = { type = ZONE_CHANGE_TYPE.MODIFIED, zone_id = 0, zone_name = "" }
+    event = { type = REGION_CHANGE_TYPE.MODIFIED, region_id = 0, region_name = "" }
   end
   
-  if render and render.on_zones_changed then
-    pcall(render.on_zones_changed, force_index, event)
+  if render and render.on_regions_changed then
+    pcall(render.on_regions_changed, force_index, event)
   end
   if ui and ui.on_backend_changed then
-    pcall(ui.on_backend_changed, { kind = "zones-changed", force_index = force_index, event = event })
+    pcall(ui.on_backend_changed, { kind = "regions-changed", force_index = force_index, event = event })
   end
 end
 
@@ -313,25 +313,25 @@ function backend.get_force(force_index)
 end
 
 ---@param force_index uint
----@return ZP.Grid
+---@return GP.Grid
 function backend.get_grid(force_index)
   return ensure_force(force_index).grid
 end
 
----Get all zones for a force
+---Get all regions for a force
 ---@param force_index uint
----@return table<uint, ZP.Zone>
-function backend.get_zones(force_index)
-  return ensure_force(force_index).zones
+---@return table<uint, GP.Region>
+function backend.get_regions(force_index)
+  return ensure_force(force_index).regions
 end
 
----Get a specific zone by id
+---Get a specific region by id
 ---@param force_index uint
----@param zone_id uint
----@return ZP.Zone|nil
-function backend.get_zone(force_index, zone_id)
-  local zones = backend.get_zones(force_index)
-  return zones[zone_id]
+---@param region_id uint
+---@return GP.Region|nil
+function backend.get_region(force_index, region_id)
+  local regions = backend.get_regions(force_index)
+  return regions[region_id]
 end
 
 ---@param force_index uint
@@ -359,7 +359,7 @@ local function push_undo(player_index, action)
   local stack = p.undo
   stack[#stack+1] = action
   -- capacity
-  local cap = storage.zp.undo_capacity or UNDO_CAPACITY
+  local cap = storage.gp.undo_capacity or UNDO_CAPACITY
   if #stack > cap then
     table.remove(stack, 1)
   end
@@ -371,31 +371,31 @@ end
 ---@param force_index uint
 ---@param name string
 ---@param color Color
----@return ZP.Zone, string description
-function backend.add_zone(force_index, player_index, name, color)
+---@return GP.Region, string description
+function backend.add_region(force_index, player_index, name, color)
   local f = ensure_force(force_index)
 
-  local id = f.next_zone_id
-  f.next_zone_id = id + 1
-  local zone = { id = id, name = name, color = { r = color.r or 0, g = color.g or 0, b = color.b or 0, a = color.a or 1 }, order = id }
-  f.zones[id] = zone
+  local id = f.next_region_id
+  f.next_region_id = id + 1
+  local region = { id = id, name = name, color = { r = color.r or 0, g = color.g or 0, b = color.b or 0, a = color.a or 1 }, order = id }
+  f.regions[id] = region
   
-  -- If this is the first non-empty zone, auto-select it for players without a selection
-  local zone_count = 0
-  for zid, _ in pairs(f.zones) do
-    if zid ~= EMPTY_ZONE_ID then
-      zone_count = zone_count + 1
+  -- If this is the first non-empty region, auto-select it for players without a selection
+  local region_count = 0
+  for zid, _ in pairs(f.regions) do
+    if zid ~= EMPTY_REGION_ID then
+      region_count = region_count + 1
     end
   end
-  if zone_count == 1 then
-    storage.zp_ui = storage.zp_ui or {}
-    storage.zp_ui.players = storage.zp_ui.players or {}
+  if region_count == 1 then
+    storage.gp_ui = storage.gp_ui or {}
+    storage.gp_ui.players = storage.gp_ui.players or {}
     for _, player in pairs(game.players) do
       if player.force.index == force_index then
-        local pui = storage.zp_ui.players[player.index] or {}
-        storage.zp_ui.players[player.index] = pui
-        if not pui.selected_zone_id or pui.selected_zone_id == EMPTY_ZONE_ID then
-          pui.selected_zone_id = id
+        local pui = storage.gp_ui.players[player.index] or {}
+        storage.gp_ui.players[player.index] = pui
+        if not pui.selected_region_id or pui.selected_region_id == EMPTY_REGION_ID then
+          pui.selected_region_id = id
         end
       end
     end
@@ -403,20 +403,20 @@ function backend.add_zone(force_index, player_index, name, color)
   
   -- Record undo action
   push_undo(player_index, {
-    type = "zone-add",
-    description = ("Add zone '%s'"):format(name),
+    type = "region-add",
+    description = ("Add region '%s'"):format(name),
     force_index = force_index,
-    zone_id = id,
-    zone_data = zone,
+    region_id = id,
+    region_data = region,
     timestamp = (game and game.tick) or 0,
   })
   
-  notify_zones_changed(force_index, {
-    type = ZONE_CHANGE_TYPE.ADDED,
-    zone_id = id,
-    zone_name = name
+  notify_regions_changed(force_index, {
+    type = REGION_CHANGE_TYPE.ADDED,
+    region_id = id,
+    region_name = name
   })
-  return zone, ("Add zone '%s'"):format(name)
+  return region, ("Add region '%s'"):format(name)
 end
 
 
@@ -425,12 +425,12 @@ end
 ---@param id uint
 ---@param name string
 ---@param color Color|nil
----@return ZP.Zone, string description
-function backend.edit_zone(force_index, player_index, id, name, color)
+---@return GP.Region, string description
+function backend.edit_region(force_index, player_index, id, name, color)
   local f = ensure_force(force_index)
-  if id == EMPTY_ZONE_ID then error("Cannot edit Empty zone") end
-  local z = f.zones[id]
-  if not z then error("Zone does not exist") end
+  if id == EMPTY_REGION_ID then error("Cannot edit Empty region") end
+  local z = f.regions[id]
+  if not z then error("Region does not exist") end
   local prev = { name = z.name, color = {r=z.color.r,g=z.color.g,b=z.color.b,a=z.color.a} }
   z.name = name
   if color then
@@ -440,28 +440,28 @@ function backend.edit_zone(force_index, player_index, id, name, color)
   -- Record undo action (only if something actually changed)
   if (name and name ~= prev.name) or (color and (color.r ~= prev.color.r or color.g ~= prev.color.g or color.b ~= prev.color.b)) then
     local name_only_changed = (name and name ~= prev.name) and not (color and (color.r ~= prev.color.r or color.g ~= prev.color.g or color.b ~= prev.color.b))
-    local change_type = name_only_changed and ZONE_CHANGE_TYPE.NAME_MODIFIED or ZONE_CHANGE_TYPE.MODIFIED
+    local change_type = name_only_changed and REGION_CHANGE_TYPE.NAME_MODIFIED or REGION_CHANGE_TYPE.MODIFIED
     
     push_undo(player_index, {
-      type = "zone-edit",
-      description = ("Edit zone '%s'"):format(prev.name),
+      type = "region-edit",
+      description = ("Edit region '%s'"):format(prev.name),
       force_index = force_index,
-      zone_id = id,
+      region_id = id,
       before = prev,
       after = { name = z.name, color = {r=z.color.r,g=z.color.g,b=z.color.b,a=z.color.a} },
       timestamp = (game and game.tick) or 0,
     })
     
-    notify_zones_changed(force_index, {
+    notify_regions_changed(force_index, {
       type = change_type,
-      zone_id = id,
-      zone_name = z.name,
+      region_id = id,
+      region_name = z.name,
       before = prev,
       after = { name = z.name, color = {r=z.color.r,g=z.color.g,b=z.color.b,a=z.color.a} }
     })
   end
   
-  return z, ("Edit zone '%s'"):format(prev.name)
+  return z, ("Edit region '%s'"):format(prev.name)
 end
 
 function sorted(t, cmp)
@@ -473,32 +473,32 @@ function sorted(t, cmp)
   return copy
 end
 
----Move a zone's order up or down by a delta amount.
----Adjusts zone orders between source and target to maintain contiguity.
+---Move a region's order up or down by a delta amount.
+---Adjusts region orders between source and target to maintain contiguity.
 ---@param force_index uint
 ---@param player_index uint
----@param id uint Zone ID to move
+---@param id uint Region ID to move
 ---@param delta int Number of positions to move (negative = up, positive = down)
 ---@return string description
-function backend.move_zone(force_index, player_index, id, delta)
+function backend.move_region(force_index, player_index, id, delta)
   local f = ensure_force(force_index)
-  if id == EMPTY_ZONE_ID then error("Cannot move Empty zone") end
-  local z = f.zones[id]
-  if not z then error("Zone does not exist") end
+  if id == EMPTY_REGION_ID then error("Cannot move Empty region") end
+  local z = f.regions[id]
+  if not z then error("Region does not exist") end
   if delta == 0 then return "No movement" end
 
 
-  -- Collect all non-empty zones sorted by order
-  local sorted_zones = sorted(f.zones, function(a, b) if a.id == EMPTY_ZONE_ID then return true else if b.id == EMPTY_ZONE_ID then return false else return a.order < b.order end end end)
-  for i, zone in pairs(sorted_zones) do
-    zone.order = i
+  -- Collect all non-empty regions sorted by order
+  local sorted_regions = sorted(f.regions, function(a, b) if a.id == EMPTY_REGION_ID then return true else if b.id == EMPTY_REGION_ID then return false else return a.order < b.order end end end)
+  for i, region in pairs(sorted_regions) do
+    region.order = i
   end
 
   -- Record before state
   local before_orders = {}
-  for zid, zone in pairs(f.zones) do
-    if zid ~= EMPTY_ZONE_ID then
-      before_orders[zid] = zone.order
+  for zid, region in pairs(f.regions) do
+    if zid ~= EMPTY_REGION_ID then
+      before_orders[zid] = region.order
     end
   end
 
@@ -509,35 +509,35 @@ function backend.move_zone(force_index, player_index, id, delta)
     z.order = z.order + delta - 0.5
   end
 
-  -- Re-sort zones by new order and reassign contiguous orders
-  sorted_zones = sorted(sorted_zones, function(a, b) return a.order < b.order end)
-  for i, zone in pairs(sorted_zones) do
-    zone.order = i
+  -- Re-sort regions by new order and reassign contiguous orders
+  sorted_regions = sorted(sorted_regions, function(a, b) return a.order < b.order end)
+  for i, region in pairs(sorted_regions) do
+    region.order = i
   end
 
   -- Record after state
   local after_orders = {}
-  for zid, zone in pairs(f.zones) do
-    if zid ~= EMPTY_ZONE_ID then
-      after_orders[zid] = zone.order
+  for zid, region in pairs(f.regions) do
+    if zid ~= EMPTY_REGION_ID then
+      after_orders[zid] = region.order
     end
   end
 
-  local desc = delta < 0 and "Move zone up" or "Move zone down"
+  local desc = delta < 0 and "Move region up" or "Move region down"
   push_undo(player_index, {
-    type = "zone-move",
+    type = "region-move",
     description = desc,
     force_index = force_index,
-    zone_id = id,
+    region_id = id,
     before_orders = before_orders,
     after_orders = after_orders,
     timestamp = (game and game.tick) or 0,
   })
 
-  notify_zones_changed(force_index, {
-    type = ZONE_CHANGE_TYPE.ORDER_CHANGED,
-    zone_id = id,
-    zone_name = z.name
+  notify_regions_changed(force_index, {
+    type = REGION_CHANGE_TYPE.ORDER_CHANGED,
+    region_id = id,
+    region_name = z.name
   })
   return desc
 end
@@ -547,17 +547,17 @@ end
 ---@param id uint
 ---@param replacement_id uint|nil
 ---@return string description
-function backend.delete_zone(force_index, player_index, id, replacement_id)
+function backend.delete_region(force_index, player_index, id, replacement_id)
   local f = ensure_force(force_index)
-  if id == EMPTY_ZONE_ID then error("Cannot delete Empty zone") end
-  local z = f.zones[id]
-  if not z then error("Zone does not exist") end
+  if id == EMPTY_REGION_ID then error("Cannot delete Empty region") end
+  local z = f.regions[id]
+  if not z then error("Region does not exist") end
   local replace = replacement_id
-  if replace == EMPTY_ZONE_ID then replace = nil end
-  if replace ~= nil and not f.zones[replace] then error("Replacement zone does not exist") end
+  if replace == EMPTY_REGION_ID then replace = nil end
+  if replace ~= nil and not f.regions[replace] then error("Replacement region does not exist") end
 
-  -- Store zone data before deletion for undo
-  local deleted_zone = { id = z.id, name = z.name, color = {r=z.color.r,g=z.color.g,b=z.color.b,a=z.color.a}, order = z.order }
+  -- Store region data before deletion for undo
+  local deleted_region = { id = z.id, name = z.name, color = {r=z.color.r,g=z.color.g,b=z.color.b,a=z.color.a}, order = z.order }
 
   -- Capture affected cells per surface for undo
   local affected_cells = {}
@@ -567,35 +567,35 @@ function backend.delete_zone(force_index, player_index, id, replacement_id)
     affected_cells[surface_index] = {}
     for key, value in pairs(surface.cells) do
       if value == id then
-        affected_cells[surface_index][key] = value  -- Store the original zone_id
+        affected_cells[surface_index][key] = value  -- Store the original region_id
         surface.cells[key] = replace
       end
     end
     -- Request refresh for surface since many cells may have changed
     notify_cells_changed(force_index, surface_index, nil, nil)
   end
-  f.zones[id] = nil
+  f.regions[id] = nil
   
   -- Record undo action
-  local target_name = (replace == nil) and "(Empty)" or (f.zones[replace] and f.zones[replace].name or tostring(replace))
+  local target_name = (replace == nil) and "(Empty)" or (f.regions[replace] and f.regions[replace].name or tostring(replace))
   push_undo(player_index, {
-    type = "zone-delete",
-    description = ("Delete zone '%s' -> %s"):format(z.name, target_name),
+    type = "region-delete",
+    description = ("Delete region '%s' -> %s"):format(z.name, target_name),
     force_index = force_index,
-    zone_id = id,
-    zone_data = deleted_zone,
+    region_id = id,
+    region_data = deleted_region,
     replacement_id = replace,
     affected_cells = affected_cells,
     timestamp = (game and game.tick) or 0,
   })
   
-  notify_zones_changed(force_index, {
-    type = ZONE_CHANGE_TYPE.DELETED,
-    zone_id = id,
-    zone_name = z.name,
-    before = deleted_zone
+  notify_regions_changed(force_index, {
+    type = REGION_CHANGE_TYPE.DELETED,
+    region_id = id,
+    region_name = z.name,
+    before = deleted_region
   })
-  return ("Delete zone '%s' -> %s" ):format(z.name, target_name)
+  return ("Delete region '%s' -> %s" ):format(z.name, target_name)
 end
 
 ---@param player_index uint
@@ -605,7 +605,7 @@ local function push_undo(player_index, action)
   local stack = p.undo
   stack[#stack+1] = action
   -- capacity
-  local cap = storage.zp.undo_capacity or UNDO_CAPACITY
+  local cap = storage.gp.undo_capacity or UNDO_CAPACITY
   if #stack > cap then
     table.remove(stack, 1)
   end
@@ -648,11 +648,11 @@ end
 ---@param player_index uint
 ---@param force_index uint
 ---@param surface_index uint
----@param zone_id uint|nil
+---@param region_id uint|nil
 ---@param left_top MapPosition
 ---@param right_bottom MapPosition
 ---@return number affected_count
-function backend.fill_rectangle(player_index, force_index, surface_index, zone_id, left_top, right_bottom)
+function backend.fill_rectangle(player_index, force_index, surface_index, region_id, left_top, right_bottom)
   local f = ensure_force(force_index)
   local surf = backend.get_surface_image(force_index, surface_index)
   local g = f.grid
@@ -667,7 +667,7 @@ function backend.fill_rectangle(player_index, force_index, surface_index, zone_i
 
   local affected = {}
   local changed_set = {}
-  local assign_id = normalize_zone_id(zone_id)
+  local assign_id = normalize_region_id(region_id)
 
   local count = 0
 
@@ -675,7 +675,7 @@ function backend.fill_rectangle(player_index, force_index, surface_index, zone_i
     for y = miny, maxy do
       local key = cell_key(x, y)
       local prev = surf.cells[key]
-      if prev == EMPTY_ZONE_ID then prev = nil end -- sanitize stray 0s to nil
+      if prev == EMPTY_REGION_ID then prev = nil end -- sanitize stray 0s to nil
       if prev ~= assign_id then
         affected[key] = { prev = prev }
         surf.cells[key] = assign_id
@@ -689,12 +689,12 @@ function backend.fill_rectangle(player_index, force_index, surface_index, zone_i
   if assign_id == nil then
     desc = "Erase rectangle"
   else
-    local z = f.zones[assign_id]
+    local z = f.regions[assign_id]
     desc = ("Fill rectangle with '%s'" ):format(z and z.name or tostring(assign_id))
   end
 
   if count > 0 then
-    push_undo(player_index, { type = "rect", force_index = force_index, surface_index = surface_index, description = desc, affected = affected, new_zone_id = assign_id, timestamp = (game and game.tick) or 0 })
+    push_undo(player_index, { type = "rect", force_index = force_index, surface_index = surface_index, description = desc, affected = affected, new_region_id = assign_id, timestamp = (game and game.tick) or 0 })
   end
   notify_cells_changed(force_index, surface_index, changed_set, assign_id)
   return count
@@ -716,10 +716,10 @@ function backend.redo_rect(action)
   local surf = backend.get_surface_image(action.force_index, action.surface_index)
   local changed_set = {}
   for key, _ in pairs(action.affected or {}) do
-    surf.cells[key] = action.new_zone_id
+    surf.cells[key] = action.new_region_id
     changed_set[key] = true
   end
-  notify_cells_changed(action.force_index, action.surface_index, changed_set, action.new_zone_id)
+  notify_cells_changed(action.force_index, action.surface_index, changed_set, action.new_region_id)
 end
 
 
@@ -731,73 +731,73 @@ function backend.undo(player_index)
 
   if action.type == "rect" then
     backend.undo_rect(action)
-  elseif action.type == "zone-add" then
+  elseif action.type == "region-add" then
     local f = ensure_force(action.force_index)
-    local zone_name = action.zone_data and action.zone_data.name or "unknown"
-    f.zones[action.zone_id] = nil
-    notify_zones_changed(action.force_index, {
-      type = ZONE_CHANGE_TYPE.DELETED,
-      zone_id = action.zone_id,
-      zone_name = zone_name,
-      before = action.zone_data
+    local region_name = action.region_data and action.region_data.name or "unknown"
+    f.regions[action.region_id] = nil
+    notify_regions_changed(action.force_index, {
+      type = REGION_CHANGE_TYPE.DELETED,
+      region_id = action.region_id,
+      region_name = region_name,
+      before = action.region_data
     })
-  elseif action.type == "zone-edit" then
+  elseif action.type == "region-edit" then
     local f = ensure_force(action.force_index)
-    local z = f.zones[action.zone_id]
+    local z = f.regions[action.region_id]
     if z and action.before then
       local name_only_changed = (action.before.name ~= action.after.name) and (action.before.color.r == action.after.color.r and action.before.color.g == action.after.color.g and action.before.color.b == action.after.color.b)
-      local change_type = name_only_changed and ZONE_CHANGE_TYPE.NAME_MODIFIED or ZONE_CHANGE_TYPE.MODIFIED
+      local change_type = name_only_changed and REGION_CHANGE_TYPE.NAME_MODIFIED or REGION_CHANGE_TYPE.MODIFIED
       
       z.name = action.before.name
       z.color = { r = action.before.color.r, g = action.before.color.g, b = action.before.color.b, a = action.before.color.a }
-      notify_zones_changed(action.force_index, {
+      notify_regions_changed(action.force_index, {
         type = change_type,
-        zone_id = action.zone_id,
-        zone_name = z.name,
+        region_id = action.region_id,
+        region_name = z.name,
         before = action.after,
         after = action.before
       })
     end
-  elseif action.type == "zone-delete" then
+  elseif action.type == "region-delete" then
     local f = ensure_force(action.force_index)
-    if action.zone_data then
-      f.zones[action.zone_id] = action.zone_data
-      -- Restore next_zone_id if needed
-      if action.zone_id >= f.next_zone_id then
-        f.next_zone_id = action.zone_id + 1
+    if action.region_data then
+      f.regions[action.region_id] = action.region_data
+      -- Restore next_region_id if needed
+      if action.region_id >= f.next_region_id then
+        f.next_region_id = action.region_id + 1
       end
       -- Restore affected cells
       if action.affected_cells then
         for surface_index, cells in pairs(action.affected_cells) do
           local surf = backend.get_surface_image(action.force_index, surface_index)
-          for key, zone_id in pairs(cells) do
-            surf.cells[key] = zone_id
+          for key, region_id in pairs(cells) do
+            surf.cells[key] = region_id
           end
           notify_cells_changed(action.force_index, surface_index, nil, nil)
         end
       end
-      notify_zones_changed(action.force_index, {
-        type = ZONE_CHANGE_TYPE.ADDED,
-        zone_id = action.zone_id,
-        zone_name = action.zone_data.name
+      notify_regions_changed(action.force_index, {
+        type = REGION_CHANGE_TYPE.ADDED,
+        region_id = action.region_id,
+        region_name = action.region_data.name
       })
     end
-  elseif action.type == "zone-move" then
+  elseif action.type == "region-move" then
     local f = ensure_force(action.force_index)
     if action.before_orders then
-      local zone_name = "unknown"
+      local region_name = "unknown"
       for zid, order in pairs(action.before_orders) do
-        if f.zones[zid] then
-          f.zones[zid].order = order
-          if zid == action.zone_id then
-            zone_name = f.zones[zid].name
+        if f.regions[zid] then
+          f.regions[zid].order = order
+          if zid == action.region_id then
+            region_name = f.regions[zid].name
           end
         end
       end
-      notify_zones_changed(action.force_index, {
-        type = ZONE_CHANGE_TYPE.ORDER_CHANGED,
-        zone_id = action.zone_id,
-        zone_name = zone_name
+      notify_regions_changed(action.force_index, {
+        type = REGION_CHANGE_TYPE.ORDER_CHANGED,
+        region_id = action.region_id,
+        region_name = region_name
       })
     end
   elseif action.type == "grid" then
@@ -835,32 +835,32 @@ function backend.redo(player_index)
 
   if action.type == "rect" then
     backend.redo_rect(action)
-  elseif action.type == "zone-add" then
-    if action.zone_data then
-      f.zones[action.zone_id] = action.zone_data
-      notify_zones_changed(action.force_index, {
-        type = ZONE_CHANGE_TYPE.ADDED,
-        zone_id = action.zone_id,
-        zone_name = action.zone_data.name
+  elseif action.type == "region-add" then
+    if action.region_data then
+      f.regions[action.region_id] = action.region_data
+      notify_regions_changed(action.force_index, {
+        type = REGION_CHANGE_TYPE.ADDED,
+        region_id = action.region_id,
+        region_name = action.region_data.name
       })
     end
-  elseif action.type == "zone-edit" then
-    local z = f.zones[action.zone_id]
+  elseif action.type == "region-edit" then
+    local z = f.regions[action.region_id]
     if z and action.after then
       local name_only_changed = (action.before.name ~= action.after.name) and (action.before.color.r == action.after.color.r and action.before.color.g == action.after.color.g and action.before.color.b == action.after.color.b)
-      local change_type = name_only_changed and ZONE_CHANGE_TYPE.NAME_MODIFIED or ZONE_CHANGE_TYPE.MODIFIED
+      local change_type = name_only_changed and REGION_CHANGE_TYPE.NAME_MODIFIED or REGION_CHANGE_TYPE.MODIFIED
       
       z.name = action.after.name
       z.color = { r = action.after.color.r, g = action.after.color.g, b = action.after.color.b, a = action.after.color.a }
-      notify_zones_changed(action.force_index, {
+      notify_regions_changed(action.force_index, {
         type = change_type,
-        zone_id = action.zone_id,
-        zone_name = z.name,
+        region_id = action.region_id,
+        region_name = z.name,
         before = action.before,
         after = action.after
       })
     end
-  elseif action.type == "zone-delete" then
+  elseif action.type == "region-delete" then
     local replace = action.replacement_id
     -- Remap assignments across all surfaces
     if action.affected_cells then
@@ -872,32 +872,32 @@ function backend.redo(player_index)
         notify_cells_changed(action.force_index, surface_index, nil, nil)
       end
     end
-    local zone_name = "unknown"
-    if action.zone_data then
-      zone_name = action.zone_data.name
+    local region_name = "unknown"
+    if action.region_data then
+      region_name = action.region_data.name
     end
-    f.zones[action.zone_id] = nil
-    notify_zones_changed(action.force_index, {
-      type = ZONE_CHANGE_TYPE.DELETED,
-      zone_id = action.zone_id,
-      zone_name = zone_name,
-      before = action.zone_data
+    f.regions[action.region_id] = nil
+    notify_regions_changed(action.force_index, {
+      type = REGION_CHANGE_TYPE.DELETED,
+      region_id = action.region_id,
+      region_name = region_name,
+      before = action.region_data
     })
-  elseif action.type == "zone-move" then
+  elseif action.type == "region-move" then
     if action.after_orders then
-      local zone_name = "unknown"
+      local region_name = "unknown"
       for zid, order in pairs(action.after_orders) do
-        if f.zones[zid] then
-          f.zones[zid].order = order
-          if zid == action.zone_id then
-            zone_name = f.zones[zid].name
+        if f.regions[zid] then
+          f.regions[zid].order = order
+          if zid == action.region_id then
+            region_name = f.regions[zid].name
           end
         end
       end
-      notify_zones_changed(action.force_index, {
-        type = ZONE_CHANGE_TYPE.ORDER_CHANGED,
-        zone_id = action.zone_id,
-        zone_name = zone_name
+      notify_regions_changed(action.force_index, {
+        type = REGION_CHANGE_TYPE.ORDER_CHANGED,
+        region_id = action.region_id,
+        region_name = region_name
       })
     end
   elseif action.type == "grid" then
@@ -926,7 +926,7 @@ end
 
 ---@param force_index uint
 ---@param player_index uint
----@param new_props ZP.Grid
+---@param new_props GP.Grid
 ---@param opts {reproject: boolean}|nil
 function backend.set_grid(force_index, player_index, new_props, opts)
   local f = ensure_force(force_index)
@@ -962,7 +962,7 @@ function backend.set_grid(force_index, player_index, new_props, opts)
   for surface_index, surface in pairs(f.images) do
     local before_map = surface.cells
     local after_map = {}
-    for key, zone_id in pairs(before_map) do
+    for key, region_id in pairs(before_map) do
       local ocx, ocy = parse_cell_key(key)
       local x0 = ocx * old.width + old.x_offset
       local y0 = ocy * old.height + old.y_offset
@@ -974,7 +974,7 @@ function backend.set_grid(force_index, player_index, new_props, opts)
       local nx1 = math.floor(((x1 - epsilon) - new_x_offset) / new_width)
       local ny1 = math.floor(((y1 - epsilon) - new_y_offset) / new_height)
 
-      local normalized = normalize_zone_id(zone_id)
+      local normalized = normalize_region_id(region_id)
       for ncx = nx0, nx1 do
         for ncy = ny0, ny1 do
           local nkey = cell_key(ncx, ncy)

@@ -18,7 +18,7 @@ local function selection_tool(
     dark_background_icon_size = icon_size or 64,
     flags = {"only-in-cursor", "not-stackable", "spawnable"},
     subgroup = "tool",
-    order = "a[zone-planner]-" .. name,
+    order = "a[grid-planner]-" .. name,
     stack_size = 1,
     select = {
       border_color = select_color or {r = 0.8, g = 0.8, b = 0.8},
@@ -36,7 +36,7 @@ end
 
 local tools = {
   selection_tool(
-    "zone-planner-rectangle-tool",
+    "grid-planner-rectangle-tool",
     "__base__/graphics/icons/blueprint.png",
     64,
     {r = 0.8, g = 0.8, b = 0.8},
@@ -49,37 +49,37 @@ data:extend(tools)
 local hotkeys = {
   {
     type = "custom-input",
-    name = "zp-select-rect-tool",
+    name = "gp-select-rect-tool",
     key_sequence = "CONTROL + SHIFT + R",
     consuming = "game-only"
   },
   {
     type = "custom-input",
-    name = "zp-visibility-increase",
+    name = "gp-visibility-increase",
     key_sequence = "CONTROL + SHIFT + W",
     consuming = "game-only"
   },
   {
     type = "custom-input",
-    name = "zp-visibility-decrease",
+    name = "gp-visibility-decrease",
     key_sequence = "CONTROL + SHIFT + S",
     consuming = "game-only"
   },
   {
     type = "custom-input",
-    name = "zp-undo",
+    name = "gp-undo",
     key_sequence = "CONTROL + ALT + Z",
     consuming = "game-only"
   },
   {
     type = "custom-input",
-    name = "zp-redo",
+    name = "gp-redo",
     key_sequence = "CONTROL + ALT + R",
     consuming = "game-only"
   },
   {
     type = "custom-input",
-    name = "zp-pipette",
+    name = "gp-pipette",
     key_sequence = "CONTROL + SHIFT + Q",
     consuming = "game-only"
   },

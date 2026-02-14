@@ -9,11 +9,11 @@ local function now()
 end
 
 local function log_reset()
-  helpers.write_file("zone_planner_tests.log", ("[START %d]%s"):format(now(), "\n"), false)
+  helpers.write_file("grid_planner_tests.log", ("[START %d]%s"):format(now(), "\n"), false)
 end
 
 local function log(msg)
-  helpers.write_file("zone_planner_tests.log", msg .. "\n", true)
+  helpers.write_file("grid_planner_tests.log", msg .. "\n", true)
 end
 
 local function any_player()
@@ -439,22 +439,22 @@ local function run_all()
   end
   local summary = ("Tests: %d, Passed: %d, Failed: %d"):format(total, pass, total - pass)
   log(summary)
-  game.print("zone_planner_tests: " .. summary)
+  game.print("grid_planner_tests: " .. summary)
 end
 
-remote.add_interface("zone_planner_tests", {
+remote.add_interface("grid_planner_tests", {
   run_all = run_all,
   run = function(name)
     log_reset()
     local ok = run_one(name)
     local msg = ok and ("PASS: %s"):format(name) or ("FAIL: %s"):format(name)
-    game.print("zone_planner_tests: " .. msg)
+    game.print("grid_planner_tests: " .. msg)
   end,
   list = function()
     local names = {}
     for name in pairs(TESTS) do names[#names+1] = name end
     table.sort(names)
-    game.print("zone_planner_tests: " .. table.concat(names, ", "))
+    game.print("grid_planner_tests: " .. table.concat(names, ", "))
   end,
 })
 

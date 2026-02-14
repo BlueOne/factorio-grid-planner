@@ -1,7 +1,7 @@
 local default = data.raw["gui-style"].default
 
 -- 28x28 icon button base
-default["zp_icon_button"] = {
+default["gp_icon_button"] = {
   type = "button_style",
   parent = "button",
   width = 28,
@@ -14,7 +14,7 @@ default["zp_icon_button"] = {
 }
 
 -- Green confirm icon button (28x28)
-default["zp_icon_button_green"] = {
+default["gp_icon_button_green"] = {
   type = "button_style",
   parent = "green_button",
   width = 28,
@@ -23,7 +23,7 @@ default["zp_icon_button_green"] = {
 }
 
 -- Red delete icon button (28x28)
-default["zp_icon_button_red"] = {
+default["gp_icon_button_red"] = {
   type = "button_style",
   parent = "red_button",
   width = 28,
@@ -32,14 +32,14 @@ default["zp_icon_button_red"] = {
 }
 
 -- Bigger heading label for section headers
-default["zp_heading_label"] = {
+default["gp_heading_label"] = {
   type = "label_style",
   parent = "bold_label",
   font = "default-large-bold",
 }
 
 -- 28x28 color patch label
-default["zp_color_patch_label"] = {
+default["gp_color_patch_label"] = {
   type = "label_style",
   parent = "label",
   width = 32,
@@ -50,7 +50,7 @@ default["zp_color_patch_label"] = {
 }
 
 -- Zone row button (list item)
-default["zp_zone_row_button"] = {
+default["gp_region_row_button"] = {
   type = "button_style",
   parent = "list_box_item",
   height = 40,
@@ -60,7 +60,7 @@ default["zp_zone_row_button"] = {
 }
 
 -- Zone row frame (non-interactive, matches list_box_item visuals)
-default["zp_zone_row_frame"] = {
+default["gp_region_row_frame"] = {
   type = "frame_style",
   parent = "frame",
   height = 40,
