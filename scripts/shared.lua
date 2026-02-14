@@ -6,6 +6,11 @@ function shared.parse_cell_key(key)
   return tonumber(sx), tonumber(sy)
 end
 
+function shared.get_cell_key(cx, cy)
+  return ("%d:%d"):format(cx, cy)
+end
+
+
 ---Bounds of a cell in a grid
 ---@param g Any
 ---@param cx number, in tiles
@@ -19,3 +24,5 @@ function shared.cell_bounds(g, cx, cy)
   local bottom = top + g.height
   return {x = left, y = top}, {x = right, y = bottom}
 end
+
+return shared

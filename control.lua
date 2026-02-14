@@ -8,7 +8,7 @@ flib_gui = require("__flib__.gui")
 EventHandler.add_lib(flib_gui)
 
 Util = require("__core__/lualib/util") util = Util
-
+Shared = require("scripts/shared") shared = Shared
 
 -- Util = require("scripts/util") util = Util
 -- EventHandler.add_lib(Util)

@@ -49,8 +49,8 @@ storage.zp :: ZP.StorageRoot = {
 
 local EMPTY_ZONE_ID = 0
 local DEFAULT_GRID = {
-  width = 32,
-  height = 32,
+  width = 8,
+  height = 8,
   x_offset = 0,
   y_offset = 0,
 }
@@ -81,8 +81,8 @@ DEFAULT_ZONES = {
   { name = "Stations", color = {r=0.7,g=0.6,b=0.5} },
   { name = "Primary Products", color = {r=0.5,g=0.5,b=1.0} },
   { name = "Intermediate Products", color = {r=0.4,g=1.0,b=0.4} },
-  { name = "End Products", color = {r=0.6,g=1.0,b=1.0} },
-  { name = "Research", color = {r=1.0,g=0.4,b=0.4} },
+  { name = "End Products", color = {r=1,g=0.66,b=0.33} },
+  { name = "Research", color = {r=0.5,g=0.75,b=1.0} },
   { name = "Power", color = {r=1.0,g=1.0,b=0.5} },
   { name = "Military", color = {r=0.8,g=0.2,b=0.2} },
   { name = "Utility", color = {r=0.9, g=0.4, b=0.8} },

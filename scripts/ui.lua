@@ -186,14 +186,14 @@ end
 dialog.register("zp_properties_dialog", {
   on_confirm = function(dlg, player)
     local g = backend.get_grid(player.force.index)
-    local width_elem = find_child(dlg, "zp_prop_width")
-    local height_elem = find_child(dlg, "zp_prop_height")
+    local size_elem = find_child(dlg, "zp_prop_size")
     local x_offset_elem = find_child(dlg, "zp_prop_x_offset")
     local y_offset_elem = find_child(dlg, "zp_prop_y_offset")
+    local size = tonumber(size_elem and size_elem.text) or g.width or g.height or 32
     local reproject_elem = find_child(dlg, "zp_prop_reproject")
     local new_props = {
-      width = tonumber(width_elem and width_elem.text) or g.width or 32,
-      height = tonumber(height_elem and height_elem.text) or g.height or 32,
+      width = size,
+      height = size,
       x_offset = tonumber(x_offset_elem and x_offset_elem.text) or g.x_offset or 0,
       y_offset = tonumber(y_offset_elem and y_offset_elem.text) or g.y_offset or 0,
     }
@@ -565,8 +565,6 @@ function ui.rebuild_player(player_index, reason)
   storage.zp_ui.is_building = false
 end
 
--- Event handlers
-ui.events = {}
 
 -- Handler function implementations
 function handlers.toggle_main_frame(e)
@@ -590,11 +588,10 @@ function handlers.properties_open(e)
     title = "Properties",
     location = e.cursor_display_location,
     children = {
-      labeled_textfield("Width", "zp_prop_width", g.width or 32),
-      labeled_textfield("Height", "zp_prop_height", g.height or 32),
+      labeled_textfield("Size", "zp_prop_size", g.width or g.height or 32),
       labeled_textfield("X offset", "zp_prop_x_offset", g.x_offset or 0),
       labeled_textfield("Y offset", "zp_prop_y_offset", g.y_offset or 0),
-      { type = "checkbox", name = "zp_prop_reproject", state = false, caption = "Reproject existing cells" }
+      { type = "checkbox", name = "zp_prop_reproject", state = true, caption = "Reproject existing cells" }
     }
   })
 end
@@ -845,6 +842,9 @@ function ui.on_init(event)
     ui.rebuild_player(p.index, "init")
   end
 end
+
+-- Event handlers
+ui.events = {}
 
 ---Create per-player UI on player creation.
 function ui.events.on_player_created(event)
