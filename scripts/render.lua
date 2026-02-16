@@ -73,12 +73,6 @@ local function ensure_surface_state(force_index, surface_index)
 end
 
 
--- Faster bit value check. Begin at 1 for least significant bit.
-local function bit_value_at(mask, bit)
-  power = 2 ^ (bit - 1)
-  return (mask % (power * 2)) >= power
-end
-
 
 -- Cell Drawing and Updating
 -------------------------------------------------------------------------------
@@ -104,13 +98,13 @@ end
 ---@param surface_index uint
 ---@param key string
 ---@param region_id uint|nil
-local function draw_cell(force_index, surface_index, key, region_id)
+local function draw_cell(force_index, surface_index, key, region_id, grid, regions, surface)
   local surf = ensure_surface_state(force_index, surface_index)
   local cell = surf.cells[key]
 
-  local surface = game.get_surface(surface_index) --[[@as LuaSurface]]
-  local g = backend.get_grid(force_index)
-  local regions = backend.get_regions(force_index)
+  local surface = surface or game.get_surface(surface_index) --[[@as LuaSurface]]
+  local g = grid or backend.get_grid(force_index)
+  local regions = regions or backend.get_regions(force_index)
   local region = region_id and regions[region_id] or nil
   local cx, cy = shared.parse_cell_key(key)
   local lt, rb = cell_bounds(g, cx, cy)
@@ -248,37 +242,34 @@ end
 -- Corner Drawing and Updating
 -------------------------------------------------------------------------------
 
-local function quadrants_mask_to_sprite_and_rotation(mask) 
-  local top_left = bit_value_at(mask, 1)
-  local top_right = bit_value_at(mask, 2)
-  local bottom_left = bit_value_at(mask, 3)
-  local bottom_right = bit_value_at(mask, 4)
-  local count = (top_left and 1 or 0) + (top_right and 1 or 0) + (bottom_left and 1 or 0) + (bottom_right and 1 or 0)
-  if count == 0 or count == 4 then
-    return nil, nil  -- no corner needed for empty or full coverage
-  end
-  if count == 1 then
-    if top_left then return 0, 0 end  -- top-left
-    if top_right then return 0, 0.25 end  -- top-right
-    if bottom_left then return 0, 0.75 end  -- bottom-left
-    if bottom_right then return 0, 0.5 end  -- bottom-right
-  end
+-- Precomputed lookup table for quadrants_mask_to_sprite_and_rotation
+-- Maps mask value (0-15) to {sprite_index, orientation}
+-- nil entry means no corner sprite needed
+local QUADRANT_SPRITE_LOOKUP = {
+  [0] = nil,  -- 0000: empty, no corner
+  [1] = {0, 0},  -- 0001: top-left only
+  [2] = {0, 0.25},  -- 0010: top-right only
+  [3] = {1, 0},  -- 0011: top edge
+  [4] = {0, 0.75},  -- 0100: bottom-left only
+  [5] = {1, 0.75},  -- 0101: left edge
+  [6] = {3, 0.25},  -- 0110: diagonal (top-right + bottom-left)
+  [7] = {2, 0},  -- 0111: missing bottom-right
+  [8] = {0, 0.5},  -- 1000: bottom-right only
+  [9] = {3, 0},  -- 1001: diagonal (top-left + bottom-right)
+  [10] = {1, 0.25},  -- 1010: right edge
+  [11] = {2, 0.25},  -- 1011: missing bottom-left
+  [12] = {1, 0.5},  -- 1100: bottom edge
+  [13] = {2, 0.75},  -- 1101: missing top-right
+  [14] = {2, 0.5},  -- 1110: missing top-left
+  [15] = nil,  -- 1111: full coverage, no corner
+}
 
-  if count == 2 then
-    if top_left and top_right then return 1, 0 end  -- top edge
-    if bottom_left and bottom_right then return 1, 0.5 end  -- bottom edge
-    if top_left and bottom_left then return 1, 0.75 end  -- left edge
-    if top_right and bottom_right then return 1, 0.25 end  -- right edge
-    if top_left and bottom_right then return 3, 0 end  -- diagonal
-    if top_right and bottom_left then return 3, 0.25 end  -- diagonal
+local function quadrants_mask_to_sprite_and_rotation(mask)
+  local result = QUADRANT_SPRITE_LOOKUP[mask]
+  if result then
+    return result[1], result[2]
   end
-
-  if count == 3 then
-    if not top_left then return 2, 0.5 end  -- missing top-left
-    if not top_right then return 2, 0.75 end  -- missing top-right
-    if not bottom_left then return 2, 0.25 end  -- missing bottom-left
-    if not bottom_right then return 2, 0 end  -- missing bottom-right
-  end
+  return nil, nil
 end
 
 
@@ -295,7 +286,7 @@ end
 -- (x, y)     (x+1, y)
 -- (x, y+1)   (x+1, y+1)
 --- Ensure all corner sprites at this coordinate are correct and there are no additional corners. Otherwise, scrap all corners and recreate from scratch based on current adjacency.
-local function draw_corner(surface_index, force_index, image, x, y, corner_key, visibility_list)
+local function draw_corner(surface_index, force_index, image, x, y, corner_key, visibility_list, grid, regions)
   local mask = {}
   local mask_active_render = {}
 
@@ -357,17 +348,18 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
   surface_render_state.corners[cell_key] = nil
 
   -- recreate corners based on current adjacency
-  local grid = backend.get_grid(force_index)
+  local grid = grid or backend.get_grid(force_index)
   local world_x = (x + 1) * grid.width + grid.x_offset
   local world_y = (y + 1) * grid.height + grid.y_offset
   local x_scale = grid.width / 8
   local y_scale = grid.height / 8
   local target_position = { x = world_x, y = world_y }
-  local regions = backend.get_regions(force_index)
+  local regions = regions or backend.get_regions(force_index)
   for region_id, mask in pairs(mask) do
-    local sprite_index, orientation = quadrants_mask_to_sprite_and_rotation(mask)
+    local lookup_result = QUADRANT_SPRITE_LOOKUP[mask]
 
-    if sprite_index then
+    if lookup_result then
+      local sprite_index, orientation = lookup_result and lookup_result[1], lookup_result and lookup_result[2] or nil
       local corner = {
         quadrants_mask = mask,
         region_id = region_id,
@@ -410,8 +402,8 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
         }
       end
 
-      surface_render_state.corners[shared.get_cell_key(x, y)] = surface_render_state.corners[shared.get_cell_key(x, y)] or {}
-      table.insert(surface_render_state.corners[shared.get_cell_key(x, y)], corner)
+      surface_render_state.corners[corner_key] = surface_render_state.corners[corner_key] or {}
+      table.insert(surface_render_state.corners[corner_key], corner)
     end
   end
 end
@@ -473,12 +465,15 @@ local function rebuild_surface(force_index, surface_index)
   
   -- Build player visibility lists once for all cells
   local players_by_level = build_player_visibility_lists(force_index)
+  local surface = game.get_surface(surface_index) --[[@as LuaSurface]]
+  local grid = backend.get_grid(force_index)
+  local regions = backend.get_regions(force_index)
   
   -- Redraw all cells with all variants
   local cells = (img and img.cells) or {}
   for key, region_id in pairs(cells) do
     if region_id then
-      draw_cell(force_index, surface_index, key, region_id)
+      draw_cell(force_index, surface_index, key, region_id, grid, regions, surface)
       update_cell_visibility(force_index, surface_index, key, players_by_level)
     end
   end
@@ -499,7 +494,7 @@ local function rebuild_surface(force_index, surface_index)
       mark_corner_for_fix(cx,     cy)
     end
     for corner_key, p in pairs(corners_to_fix) do
-      draw_corner(surface_index, force_index, img, p.x, p.y, corner_key, players_by_level)
+      draw_corner(surface_index, force_index, img, p.x, p.y, corner_key, players_by_level, grid, regions)
     end
   end
 end
@@ -521,6 +516,9 @@ function render.on_cells_changed(force_index, surface_index, changed, new_region
 
   -- Build player visibility lists once for all changed cells
   local players_by_level = build_player_visibility_lists(force_index)
+  local surface = game.get_surface(surface_index) --[[@as LuaSurface]]
+  local grid = backend.get_grid(force_index)
+  local regions = backend.get_regions(force_index)
 
   -- Collect all corners that need updating (each corner may be touched by up to 4 cells)
   local corners_to_fix = {}
@@ -532,7 +530,7 @@ function render.on_cells_changed(force_index, surface_index, changed, new_region
   for key, p in pairs(changed) do
     local cx, cy = shared.parse_cell_key(key)
     local region_id = img.cells[key]
-    draw_cell(force_index, surface_index, key, region_id)
+    draw_cell(force_index, surface_index, key, region_id, grid, regions, surface)
     update_cell_visibility(force_index, surface_index, key, players_by_level)
     
     -- Mark the four corners adjacent to this cell
@@ -545,7 +543,7 @@ function render.on_cells_changed(force_index, surface_index, changed, new_region
   -- Fix all affected corners
   for corner_key, p in pairs(corners_to_fix) do
     local cx, cy = p.x, p.y
-    draw_corner(surface_index, force_index, img, cx, cy, corner_key, players_by_level)
+    draw_corner(surface_index, force_index, img, cx, cy, corner_key, players_by_level, grid, regions)
   end
 end
 

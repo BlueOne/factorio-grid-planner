@@ -7,6 +7,6 @@
     "base >= 2.0.0",
     "flib >= 0.16.5"
 	],
-	"description": "Plan out base geometry and reserve space by assigning chunks to zones. Basically a pixel art editor overlaid on the factorio map, on a large grid, intended for planning factory layouts. ",
+	"description": "Plan out base geometry and reserve space by assigning chunks to regions. Basically a pixel art editor on a large grid overlaid on the factorio map, intended for planning factory layouts. ",
 	"factorio_version": "2.0"
 }

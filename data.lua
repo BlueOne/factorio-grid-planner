@@ -68,13 +68,13 @@ local hotkeys = {
   {
     type = "custom-input",
     name = "gp-undo",
-    key_sequence = "CONTROL + ALT + Z",
+    key_sequence = "CONTROL + SHIFT + Z",
     consuming = "game-only"
   },
   {
     type = "custom-input",
     name = "gp-redo",
-    key_sequence = "CONTROL + ALT + R",
+    key_sequence = "CONTROL + SHIFT + Y",
     consuming = "game-only"
   },
   {
