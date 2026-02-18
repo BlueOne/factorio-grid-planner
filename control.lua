@@ -1,6 +1,4 @@
 
-Version = "0.1.1"
-Mod_Prefix = "jump"
 
 -- Utils
 EventHandler = require("__core__/lualib/event_handler")

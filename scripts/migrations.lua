@@ -4,87 +4,99 @@ local Migrations = {}
 render = require("scripts/render")
 
 Migrations.migration_functions = {
-    -- example
-    -- ["0.1.0"] = function()
-    --   -- do migration stuff here
-    -- end,
-    ["0.1.0"] = function()
-      -- Migration to 0.1.1: destroy all existing render objects and force a full redraw.
-      if storage and storage.zp_render and storage.zp_render.forces then
-        for _, fstate in pairs(storage.zp_render.forces) do
-          for _, surf in pairs(fstate.surfaces or {}) do
-            for _, cell in pairs(surf.cells or {}) do
-              for _, variant in pairs(cell.variants or {}) do
+  -- example
+  -- ["0.1.0"] = function()
+  --   -- do migration stuff here
+  -- end,
+  ["0.1.0"] = function()
+    -- Migration to 0.1.1: destroy all existing render objects and force a full redraw.
+    if storage and storage.zp_render and storage.zp_render.forces then
+      for _, fstate in pairs(storage.zp_render.forces) do
+        for _, surf in pairs(fstate.surfaces or {}) do
+          for _, cell in pairs(surf.cells or {}) do
+            for _, variant in pairs(cell.variants or {}) do
+              if variant.game and variant.game.valid then variant.game.destroy() end
+              if variant.chart and variant.chart.valid then variant.chart.destroy() end
+            end
+          end
+          for _, corner_list in pairs(surf.corners or {}) do
+            for _, corner in pairs(corner_list or {}) do
+              for _, variant in pairs(corner.variants or {}) do
                 if variant.game and variant.game.valid then variant.game.destroy() end
                 if variant.chart and variant.chart.valid then variant.chart.destroy() end
               end
             end
-            for _, corner_list in pairs(surf.corners or {}) do
-              for _, corner in pairs(corner_list or {}) do
-                for _, variant in pairs(corner.variants or {}) do
-                  if variant.game and variant.game.valid then variant.game.destroy() end
-                  if variant.chart and variant.chart.valid then variant.chart.destroy() end
-                end
-              end
-            end
           end
         end
-        -- clear render storage so renderer recreates clean state
-        storage.zp_render = nil
       end
-      
+      -- clear render storage so renderer recreates clean state
+      storage.zp_render = nil
+    end
+    
 
-      -- Trigger renderer to rebuild for all forces
-      if storage.zp and storage.zp.forces then
-        for force_index, _ in pairs(storage.zp.forces) do
-          render.on_grid_changed(force_index)
-        end
+    -- Trigger renderer to rebuild for all forces
+    if storage.zp and storage.zp.forces then
+      for force_index, _ in pairs(storage.zp.forces) do
+        render.on_grid_changed(force_index)
       end
-    end,
-    ["0.1.1"] = function()
-      -- Migration to 0.1.2: convert grid (per-force) to grids (per-force-per-surface)
-      if storage and storage.gp and storage.gp.forces then
-        for force_index, fstate in pairs(storage.gp.forces) do
-          if fstate.grid then
-            -- Old structure has a single grid per force
-            local old_grid = fstate.grid
-            fstate.grids = {}
-            
-            -- Copy grid to all surfaces that have data
-            if fstate.images then
-              for surface_index, _ in pairs(fstate.images) do
-                fstate.grids[surface_index] = {
-                  width = old_grid.width,
-                  height = old_grid.height,
-                  x_offset = old_grid.x_offset,
-                  y_offset = old_grid.y_offset,
-                }
-              end
-            end
-            
-            -- If no surfaces have data, create a default grid for surface 1 (nauvis)
-            if not next(fstate.grids) then
-              fstate.grids[1] = {
+    end
+  end,
+  ["0.1.1"] = function()
+    -- Migration to 0.1.2: convert grid (per-force) to grids (per-force-per-surface)
+    if storage and storage.gp and storage.gp.forces then
+      for force_index, fstate in pairs(storage.gp.forces) do
+        if fstate.grid then
+          -- Old structure has a single grid per force
+          local old_grid = fstate.grid
+          fstate.grids = {}
+          
+          -- Copy grid to all surfaces that have data
+          if fstate.images then
+            for surface_index, _ in pairs(fstate.images) do
+              fstate.grids[surface_index] = {
                 width = old_grid.width,
                 height = old_grid.height,
                 x_offset = old_grid.x_offset,
                 y_offset = old_grid.y_offset,
               }
             end
-            
-            -- Remove old grid property
-            ---@diagnostic disable-next-line: inject-field
-            fstate.grid = nil
           end
-        end
-        log("[Grid-Planner] Migration 0.1.1->0.1.2: Converted grid structure to per-surface grids")
-
-        -- Rebuild all player uis
-        for _, player in pairs(game.players) do
-          ui.rebuild_player(player.index, "migration")
+          
+          -- If no surfaces have data, create a default grid for surface 1 (nauvis)
+          if not next(fstate.grids) then
+            fstate.grids[1] = {
+              width = old_grid.width,
+              height = old_grid.height,
+              x_offset = old_grid.x_offset,
+              y_offset = old_grid.y_offset,
+            }
+          end
+          
+          -- Remove old grid property
+          ---@diagnostic disable-next-line: inject-field
+          fstate.grid = nil
         end
       end
-    end,
+      log("[Grid-Planner] Migration 0.1.1->0.1.2: Converted grid structure to per-surface grids")
+
+      -- Rebuild all player uis
+      for _, player in pairs(game.players) do
+        ui.rebuild_player(player.index, "migration")
+      end
+    end
+  end,
+  ["0.1.2"] = function()
+    -- Clear undo queue as it was completely changed.
+    if storage.gp and storage.gp.players then
+      for _, pdata in pairs(storage.gp.players) do
+        pdata.undo = {}
+        pdata.redo = {}
+      end
+      for _, player in pairs(game.players) do
+        ui.rebuild_player(player.index, "migration")
+      end
+    end
+  end
 }
 
 local function version_greater(v1, v2)
