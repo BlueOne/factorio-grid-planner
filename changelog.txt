@@ -1,0 +1,20 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.1.2
+Date: 12.02.2026
+  Bugfixes:
+    - Grid dimensions are per surface now
+    - Add a little hide button for the edit functionality of the regions 
+
+
+---------------------------------------------------------------------------------------------------
+Version: 0.1.1
+Date: 16.02.2026
+  Features:
+    - Initial Release
+    - Renderer Refactor
+
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0 
+Date: 12.02.2026
+  Features:
+    - Initial Private Testing

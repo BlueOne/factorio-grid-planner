@@ -37,7 +37,7 @@ storage.gp :: GP.StorageRoot = {
 ---@class GP.ForceState
 ---@field next_region_id uint
 ---@field regions table<uint, GP.Region>
----@field grid GP.Grid
+---@field grids table<uint, GP.Grid>
 ---@field images table<uint, {cells: table<string, uint?>}>
 
 ---@class GP.PlayerState
@@ -81,7 +81,7 @@ DEFAULT_REGIONS = {
   { name = "Stations", color = {r=0.7,g=0.6,b=0.5} },
   { name = "Primary Products", color = {r=0.5,g=0.5,b=1.0} },
   { name = "Intermediate Products", color = {r=0.4,g=1.0,b=0.4} },
-  { name = "End Products", color = {r=1,g=0.66,b=0.33} },
+  { name = "End Products", color = {r=1,g=0.5,b=0.33} },
   { name = "Research", color = {r=0.5,g=0.75,b=1.0} },
   { name = "Power", color = {r=1.0,g=1.0,b=0.5} },
   { name = "Military", color = {r=0.8,g=0.2,b=0.2} },
@@ -113,12 +113,7 @@ local function ensure_force(force_index)
       regions = {
         [EMPTY_REGION_ID] = { id = EMPTY_REGION_ID, name = "(Empty)", color = {r=0,g=0,b=0,a=0}, order = 0 },
       },
-      grid = {
-        width = DEFAULT_GRID.width,
-        height = DEFAULT_GRID.height,
-        x_offset = DEFAULT_GRID.x_offset,
-        y_offset = DEFAULT_GRID.y_offset,
-      },
+      grids = {},
       images = {},
     }
     forces[force_index] = f
@@ -129,6 +124,22 @@ local function ensure_force(force_index)
   end
 
   return f
+end
+
+---@param force_index uint
+---@param surface_index uint
+---@return GP.Grid
+local function ensure_grid(force_index, surface_index)
+  local f = ensure_force(force_index)
+  if not f.grids[surface_index] then
+    f.grids[surface_index] = {
+      width = DEFAULT_GRID.width,
+      height = DEFAULT_GRID.height,
+      x_offset = DEFAULT_GRID.x_offset,
+      y_offset = DEFAULT_GRID.y_offset,
+    }
+  end
+  return f.grids[surface_index]
 end
 
 ---@param force_index uint
@@ -150,7 +161,6 @@ local function ensure_player(player_index)
   local players = storage.gp.players
   local p = players[player_index]
   if not p then
-    local g = ensure_force(player_index and game.get_player(player_index) and game.get_player(player_index).force.index or 1).grid
     p = {
       selected_region_id = EMPTY_REGION_ID,
       selected_tool = nil,
@@ -186,6 +196,14 @@ end
 function backend.get_boundary_opacity_index(player_index)
   local p = ensure_player(player_index)
   return p.boundary_opacity_index
+end
+
+---Get the grid for a force on a specific surface
+---@param force_index uint
+---@param surface_index uint
+---@return GP.Grid
+function backend.get_grid(force_index, surface_index)
+  return ensure_grid(force_index, surface_index)
 end
 
 ---Get the selected region ID for a player
@@ -312,12 +330,6 @@ function backend.get_force(force_index)
   return ensure_force(force_index)
 end
 
----@param force_index uint
----@return GP.Grid
-function backend.get_grid(force_index)
-  return ensure_force(force_index).grid
-end
-
 ---Get all regions for a force
 ---@param force_index uint
 ---@return table<uint, GP.Region>
@@ -342,11 +354,12 @@ function backend.get_force_images(force_index)
 end
 
 ---@param force_index uint
+---@param surface_index uint
 ---@param x double
 ---@param y double
 ---@return integer, integer
-function backend.tile_to_cell(force_index, x, y)
-  local g = backend.get_grid(force_index)
+function backend.tile_to_cell(force_index, surface_index, x, y)
+  local g = backend.get_grid(force_index, surface_index)
   local cx = math.floor((x - g.x_offset) / g.width)
   local cy = math.floor((y - g.y_offset) / g.height)
   return cx, cy
@@ -371,7 +384,7 @@ end
 ---@param force_index uint
 ---@param name string
 ---@param color Color
----@return GP.Region, string description
+---@return GP.Region
 function backend.add_region(force_index, player_index, name, color)
   local f = ensure_force(force_index)
 
@@ -416,7 +429,7 @@ function backend.add_region(force_index, player_index, name, color)
     region_id = id,
     region_name = name
   })
-  return region, ("Add region '%s'"):format(name)
+  return region
 end
 
 
@@ -655,7 +668,7 @@ end
 function backend.fill_rectangle(player_index, force_index, surface_index, region_id, left_top, right_bottom)
   local f = ensure_force(force_index)
   local surf = backend.get_surface_image(force_index, surface_index)
-  local g = f.grid
+  local g = backend.get_grid(force_index, surface_index)
 
   local cx1 = math.floor((left_top.x - g.x_offset) / g.width)
   local cy1 = math.floor((left_top.y - g.y_offset) / g.height)
@@ -802,8 +815,8 @@ function backend.undo(player_index)
     end
   elseif action.type == "grid" then
     local f = ensure_force(action.force_index)
-    if action.before_grid then
-      f.grid = action.before_grid
+    if action.before_grid and action.surface_index then
+      f.grids[action.surface_index] = action.before_grid
       notify_grid_changed(action.force_index)
     end
   elseif action.type == "reproject" then
@@ -813,8 +826,8 @@ function backend.undo(player_index)
       surf.cells = action.before_map
       notify_cells_changed(action.force_index, action.surface_index, nil, nil)
     end
-    if action.before_grid then
-      f.grid = action.before_grid
+    if action.before_grid and action.surface_index then
+      f.grids[action.surface_index] = action.before_grid
       notify_grid_changed(action.force_index)
     end
   end
@@ -901,8 +914,8 @@ function backend.redo(player_index)
       })
     end
   elseif action.type == "grid" then
-    if action.after_grid then
-      f.grid = action.after_grid
+    if action.after_grid and action.surface_index then
+      f.grids[action.surface_index] = action.after_grid
       notify_grid_changed(action.force_index)
     end
   elseif action.type == "reproject" then
@@ -911,8 +924,8 @@ function backend.redo(player_index)
       surf.cells = action.after_map
       notify_cells_changed(action.force_index, action.surface_index, nil, nil)
     end
-    if action.after_grid then
-      f.grid = action.after_grid
+    if action.after_grid and action.surface_index then
+      f.grids[action.surface_index] = action.after_grid
       notify_grid_changed(action.force_index)
     end
   end
@@ -925,12 +938,13 @@ function backend.redo(player_index)
 end
 
 ---@param force_index uint
+---@param surface_index uint
 ---@param player_index uint
 ---@param new_props GP.Grid
 ---@param opts {reproject: boolean}|nil
-function backend.set_grid(force_index, player_index, new_props, opts)
+function backend.set_grid(force_index, surface_index, player_index, new_props, opts)
   local f = ensure_force(force_index)
-  local old = f.grid
+  local old = ensure_grid(force_index, surface_index)
   local reproject = opts and opts.reproject
   if not reproject then
     local new_grid = {
@@ -939,11 +953,12 @@ function backend.set_grid(force_index, player_index, new_props, opts)
       x_offset = new_props.x_offset or old.x_offset,
       y_offset = new_props.y_offset or old.y_offset,
     }
-    f.grid = new_grid
+    f.grids[surface_index] = new_grid
     push_undo(player_index, {
       type = "grid",
       description = "Update grid properties",
       force_index = force_index,
+      surface_index = surface_index,
       before_grid = old,
       after_grid = new_grid,
       timestamp = (game and game.tick) or 0,
@@ -959,51 +974,52 @@ function backend.set_grid(force_index, player_index, new_props, opts)
   local new_y_offset = new_props.y_offset or old.y_offset
   local epsilon = 0.0001
   
-  for surface_index, surface in pairs(f.images) do
-    local before_map = surface.cells
-    local after_map = {}
-    for key, region_id in pairs(before_map) do
-      local ocx, ocy = parse_cell_key(key)
-      local x0 = ocx * old.width + old.x_offset
-      local y0 = ocy * old.height + old.y_offset
-      local x1 = x0 + old.width
-      local y1 = y0 + old.height
+  local surface = backend.get_surface_image(force_index, surface_index)
+  
+  local before_map = surface.cells
+  local after_map = {}
+  for key, region_id in pairs(before_map) do
+    local ocx, ocy = parse_cell_key(key)
+    local x0 = ocx * old.width + old.x_offset
+    local y0 = ocy * old.height + old.y_offset
+    local x1 = x0 + old.width
+    local y1 = y0 + old.height
 
-      local nx0 = math.floor((x0 - new_x_offset) / new_width)
-      local ny0 = math.floor((y0 - new_y_offset) / new_height)
-      local nx1 = math.floor(((x1 - epsilon) - new_x_offset) / new_width)
-      local ny1 = math.floor(((y1 - epsilon) - new_y_offset) / new_height)
+    local nx0 = math.floor((x0 - new_x_offset) / new_width)
+    local ny0 = math.floor((y0 - new_y_offset) / new_height)
+    local nx1 = math.floor(((x1 - epsilon) - new_x_offset) / new_width)
+    local ny1 = math.floor(((y1 - epsilon) - new_y_offset) / new_height)
 
-      local normalized = normalize_region_id(region_id)
-      for ncx = nx0, nx1 do
-        for ncy = ny0, ny1 do
-          local nkey = cell_key(ncx, ncy)
-          after_map[nkey] = normalized
-        end
+    local normalized = normalize_region_id(region_id)
+    for ncx = nx0, nx1 do
+      for ncy = ny0, ny1 do
+        local nkey = cell_key(ncx, ncy)
+        after_map[nkey] = normalized
       end
     end
-    surface.cells = after_map
-    -- record action per surface; UI can choose to aggregate
-    push_undo(player_index, { -- player_index from caller
-      type = "reproject",
-      description = "Reproject grid assignments",
-      force_index = force_index,
-      surface_index = surface_index,
-      before_map = before_map,
-      after_map = after_map,
-      before_grid = old,
-      after_grid = {
-        width = new_props.width or old.width,
-        height = new_props.height or old.height,
-        x_offset = new_props.x_offset or old.x_offset,
-        y_offset = new_props.y_offset or old.y_offset,
-      },
-      timestamp = (game and game.tick) or 0,
-    })
-    notify_cells_changed(force_index, surface_index, nil, nil)
   end
+  surface.cells = after_map
+  -- record action per surface; UI can choose to aggregate
+  push_undo(player_index, { -- player_index from caller
+    type = "reproject",
+    description = "Reproject grid assignments",
+    force_index = force_index,
+    surface_index = surface_index,
+    before_map = before_map,
+    after_map = after_map,
+    before_grid = old,
+    after_grid = {
+      width = new_props.width or old.width,
+      height = new_props.height or old.height,
+      x_offset = new_props.x_offset or old.x_offset,
+      y_offset = new_props.y_offset or old.y_offset,
+    },
+    timestamp = (game and game.tick) or 0,
+  })
+  notify_cells_changed(force_index, surface_index, nil, nil)
+
   -- Finally set the new grid
-  f.grid = {
+  f.grids[surface_index] = {
     width = new_props.width or old.width,
     height = new_props.height or old.height,
     x_offset = new_props.x_offset or old.x_offset,

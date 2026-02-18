@@ -103,7 +103,7 @@ local function draw_cell(force_index, surface_index, key, region_id, grid, regio
   local cell = surf.cells[key]
 
   local surface = surface or game.get_surface(surface_index) --[[@as LuaSurface]]
-  local g = grid or backend.get_grid(force_index)
+  local g = grid or backend.get_grid(force_index, surface_index)
   local regions = regions or backend.get_regions(force_index)
   local region = region_id and regions[region_id] or nil
   local cx, cy = shared.parse_cell_key(key)
@@ -348,7 +348,7 @@ local function draw_corner(surface_index, force_index, image, x, y, corner_key, 
   surface_render_state.corners[cell_key] = nil
 
   -- recreate corners based on current adjacency
-  local grid = grid or backend.get_grid(force_index)
+  local grid = grid or backend.get_grid(force_index, surface_index)
   local world_x = (x + 1) * grid.width + grid.x_offset
   local world_y = (y + 1) * grid.height + grid.y_offset
   local x_scale = grid.width / 8
@@ -466,7 +466,7 @@ local function rebuild_surface(force_index, surface_index)
   -- Build player visibility lists once for all cells
   local players_by_level = build_player_visibility_lists(force_index)
   local surface = game.get_surface(surface_index) --[[@as LuaSurface]]
-  local grid = backend.get_grid(force_index)
+  local grid = backend.get_grid(force_index, surface_index)
   local regions = backend.get_regions(force_index)
   
   -- Redraw all cells with all variants
@@ -517,7 +517,7 @@ function render.on_cells_changed(force_index, surface_index, changed, new_region
   -- Build player visibility lists once for all changed cells
   local players_by_level = build_player_visibility_lists(force_index)
   local surface = game.get_surface(surface_index) --[[@as LuaSurface]]
-  local grid = backend.get_grid(force_index)
+  local grid = backend.get_grid(force_index, surface_index)
   local regions = backend.get_regions(force_index)
 
   -- Collect all corners that need updating (each corner may be touched by up to 4 cells)
