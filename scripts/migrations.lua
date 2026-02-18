@@ -73,6 +73,7 @@ Migrations.migration_functions = {
             end
             
             -- Remove old grid property
+            ---@diagnostic disable-next-line: inject-field
             fstate.grid = nil
           end
         end
