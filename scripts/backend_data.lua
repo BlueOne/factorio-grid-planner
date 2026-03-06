@@ -29,11 +29,22 @@ storage.gp :: GP.StorageRoot = {
 ---@field x_offset int
 ---@field y_offset int
 
+---@class GP.Layer
+---@field id uint
+---@field name string
+---@field order uint
+---@field visible boolean
+---@field grid GP.Grid
+---@field cells table<string, uint|nil>
+
+---@class GP.SurfaceState
+---@field next_layer_id uint
+---@field layers table<uint, GP.Layer>
+
 ---@class GP.ForceState
 ---@field next_region_id uint
 ---@field regions table<uint, GP.Region>
----@field grids table<uint, GP.Grid>
----@field images table<uint, {cells: table<string, uint?>}>
+---@field surfaces table<uint, GP.SurfaceState>
 
 ---@class GP.PlayerState
 ---@field selected_region_id uint
@@ -41,6 +52,7 @@ storage.gp :: GP.StorageRoot = {
 ---@field undo table[]
 ---@field redo table[]
 ---@field boundary_opacity_index uint  -- 0..3 discrete setting for boundary visibility
+---@field active_layer_ids table<uint, uint>  -- surface_index -> layer_id
 
 backend_data.EMPTY_REGION_ID = 0
 backend_data.DEFAULT_GRID = {
@@ -59,12 +71,26 @@ backend_data.REGION_CHANGE_TYPE = {
   ORDER_CHANGED = "region-order-changed",  -- Region order changed (renderer can skip rebuild)
 }
 
+-- Layer change event types
+backend_data.LAYER_CHANGE_TYPE = {
+  ADDED = "layer-added",
+  DELETED = "layer-deleted",
+  MODIFIED = "layer-modified",
+  ORDER_CHANGED = "layer-order-changed",
+  VISIBILITY_CHANGED = "layer-visibility-changed",
+  GRID_CHANGED = "layer-grid-changed",
+}
+
 ---@class GP.RegionChangeEvent
 ---@field type string One of REGION_CHANGE_TYPE values
 ---@field region_id uint The region ID affected
 ---@field region_name string The region name
 ---@field before table|nil Previous state (for modified/deleted)
 ---@field after table|nil New state (for modified)
+
+---@class GP.LayerChangeEvent
+---@field type string One of LAYER_CHANGE_TYPE values
+---@field layer_id uint The layer ID affected
 
 -- Default discrete visibility index for boundaries (0=off, 1..3 = variant levels)
 local DEFAULT_OPACITY_INDEX = 2
@@ -106,45 +132,112 @@ function backend_data.ensure_force(force_index)
       regions = {
         [backend_data.EMPTY_REGION_ID] = { id = backend_data.EMPTY_REGION_ID, name = "(Empty)", color = {r=0,g=0,b=0,a=0}, order = 0 },
       },
-      grids = {},
-      images = {},
+      surfaces = {},
     }
     forces[force_index] = f
-      for _, def in pairs(DEFAULT_REGIONS) do
+    for _, def in pairs(DEFAULT_REGIONS) do
       backend_data.add_region(force_index, 1, def.name, def.color)
     end
-
   end
-
   return f
 end
 
+---Get or create a surface state for a force, initialising with a default layer.
 ---@param force_index uint
 ---@param surface_index uint
----@return GP.Grid
-function backend_data.ensure_grid(force_index, surface_index)
+---@return GP.SurfaceState
+function backend_data.ensure_surface(force_index, surface_index)
   local f = backend_data.ensure_force(force_index)
-  if not f.grids[surface_index] then
-    f.grids[surface_index] = {
-      width = backend_data.DEFAULT_GRID.width,
-      height = backend_data.DEFAULT_GRID.height,
-      x_offset = backend_data.DEFAULT_GRID.x_offset,
-      y_offset = backend_data.DEFAULT_GRID.y_offset,
+  if not f.surfaces[surface_index] then
+    local surf = { next_layer_id = 2, layers = {} }
+    f.surfaces[surface_index] = surf
+    surf.layers[1] = {
+      id = 1,
+      name = "Layer 1",
+      order = 1,
+      visible = true,
+      grid = {
+        width = backend_data.DEFAULT_GRID.width,
+        height = backend_data.DEFAULT_GRID.height,
+        x_offset = backend_data.DEFAULT_GRID.x_offset,
+        y_offset = backend_data.DEFAULT_GRID.y_offset,
+      },
+      cells = {},
     }
   end
-  return f.grids[surface_index]
+  return f.surfaces[surface_index]
 end
 
 ---@param force_index uint
 ---@param surface_index uint
----@return {cells: table<string, uint?>}
-function backend_data.get_surface_image(force_index, surface_index)
+---@param layer_id uint
+---@return GP.Layer|nil
+function backend_data.get_layer(force_index, surface_index, layer_id)
   local f = backend_data.ensure_force(force_index)
-  local images = f.images
-  if not images[surface_index] then
-    images[surface_index] = { cells = {} }
+  local surf = f.surfaces[surface_index]
+  if not surf then return nil end
+  return surf.layers[layer_id]
+end
+
+---Return all layers for a surface sorted ascending by order.
+---@param force_index uint
+---@param surface_index uint
+---@return GP.Layer[]
+function backend_data.get_sorted_layers(force_index, surface_index)
+  local surf = backend_data.ensure_surface(force_index, surface_index)
+  local list = {}
+  for _, layer in pairs(surf.layers) do
+    table.insert(list, layer)
   end
-  return images[surface_index]
+  table.sort(list, function(a, b) return a.order < b.order end)
+  return list
+end
+
+---@param player_index uint
+---@param surface_index uint
+---@return uint|nil
+function backend_data.get_active_layer_id(player_index, surface_index)
+  local p = backend_data.ensure_player(player_index)
+  if not p.active_layer_ids then return nil end
+  return p.active_layer_ids[surface_index]
+end
+
+---@param player_index uint
+---@param surface_index uint
+---@param layer_id uint
+function backend_data.set_active_layer_id(player_index, surface_index, layer_id)
+  local p = backend_data.ensure_player(player_index)
+  p.active_layer_ids = p.active_layer_ids or {}
+  p.active_layer_ids[surface_index] = layer_id
+end
+
+---Get the active layer for a player on a surface.
+---Falls back to the first sorted layer if the stored ID is invalid or missing.
+---@param player_index uint
+---@param force_index uint
+---@param surface_index uint
+---@return GP.Layer|nil
+function backend_data.get_active_layer(player_index, force_index, surface_index)
+  local layer_id = backend_data.get_active_layer_id(player_index, surface_index)
+  if layer_id then
+    local layer = backend_data.get_layer(force_index, surface_index, layer_id)
+    if layer then return layer end
+  end
+  -- fallback: first sorted layer
+  local sorted = backend_data.get_sorted_layers(force_index, surface_index)
+  return sorted[1]
+end
+
+---Convert tile coordinates to cell coordinates using a specific layer's grid.
+---@param layer GP.Layer
+---@param x number
+---@param y number
+---@return integer, integer
+function backend_data.tile_to_cell_layer(layer, x, y)
+  local g = layer.grid
+  local cx = math.floor((x - g.x_offset) / g.width)
+  local cy = math.floor((y - g.y_offset) / g.height)
+  return cx, cy
 end
 
 ---@param player_index uint
@@ -160,6 +253,7 @@ function backend_data.ensure_player(player_index)
       undo = {},
       redo = {},
       boundary_opacity_index = DEFAULT_OPACITY_INDEX,
+      active_layer_ids = {},
     }
     players[player_index] = p
   end
@@ -189,14 +283,6 @@ end
 function backend_data.get_boundary_opacity_index(player_index)
   local p = backend_data.ensure_player(player_index)
   return p.boundary_opacity_index
-end
-
----Get the grid for a force on a specific surface
----@param force_index uint
----@param surface_index uint
----@return GP.Grid
-function backend_data.get_grid(force_index, surface_index)
-  return backend_data.ensure_grid(force_index, surface_index)
 end
 
 ---Get the selected region ID for a player
@@ -234,10 +320,9 @@ end
 -- Reset helpers --------------------------------------------------------------
 ---Reset backend_data state for a single force.
 ---@param force_index uint
----@param default_regions boolean|nil  -- if true, backend_data.ensure_force will re-add defaults on next access
-function backend_data.reset_force(force_index, default_regions)
+function backend_data.reset_force(force_index)
   backend_data.ensure_storage()
-  storage.gp.forces[force_index] = nil -- reset
+  storage.gp.forces[force_index] = nil
 end
 
 ---Reset all backend_data state (forces, players, undo capacity).
@@ -252,18 +337,14 @@ function backend_data.reset_player(player_index)
   storage.gp.players[player_index] = nil
 end
 
----Reset a single surface image map for a force.
----@param force_index uint
----@param surface_index uint
-function backend_data.reset_surface(force_index, surface_index)
-  local f = backend_data.ensure_force(force_index)
-  f.images[surface_index] = { cells = {} }
-end
-
-
-function backend_data.get_from_image(image, x, y)
-  local cell_key = tostring(x) .. ":" .. tostring(y)
-  return image.cells[cell_key]
+---Get cell value from a specific layer by cell coordinates.
+---@param layer GP.Layer
+---@param cx integer
+---@param cy integer
+---@return uint|nil
+function backend_data.get_from_layer(layer, cx, cy)
+  local cell_key = tostring(cx) .. ":" .. tostring(cy)
+  return layer.cells[cell_key]
 end
 
 function backend_data.cell_key(cx, cy)
@@ -284,10 +365,13 @@ function backend_data.normalize_region_id(region_id)
 end
 
 -- Notifications --------------------------------------------------------------
-function backend_data.notify_cells_changed(force_index, surface_index, changed_set, new_region_id)
+---@param force_index uint
+---@param surface_index uint
+---@param layer_id uint
+---@param changed_set table<string, boolean>|nil
+function backend_data.notify_cells_changed(force_index, surface_index, layer_id, changed_set)
   if render and render.on_cells_changed then
-    render.on_cells_changed(force_index, surface_index, changed_set, new_region_id)
-    -- pcall(render.on_cells_changed, force_index, surface_index, changed_set, new_region_id)
+    render.on_cells_changed(force_index, surface_index, layer_id, changed_set)
   end
   if ui and ui.on_backend_changed then
     pcall(ui.on_backend_changed, { kind = "cells-changed", force_index = force_index, surface_index = surface_index })
@@ -295,12 +379,9 @@ function backend_data.notify_cells_changed(force_index, surface_index, changed_s
 end
 
 function backend_data.notify_regions_changed(force_index, event)
-  -- event is a GP.RegionChangeEvent table with structure: { type = "...", region_id = ..., region_name = ..., before = ..., after = ... }
-  -- If no event provided, default to generic STRUCTURE type (for backwards compatibility)
   if not event then
     event = { type = backend_data.REGION_CHANGE_TYPE.MODIFIED, region_id = 0, region_name = "" }
   end
-  
   if render and render.on_regions_changed then
     pcall(render.on_regions_changed, force_index, event)
   end
@@ -309,15 +390,28 @@ function backend_data.notify_regions_changed(force_index, event)
   end
 end
 
-function backend_data.notify_grid_changed(force_index)
+---@param force_index uint
+---@param surface_index uint
+function backend_data.notify_grid_changed(force_index, surface_index)
   if render and render.on_grid_changed then
-    pcall(render.on_grid_changed, force_index)
+    pcall(render.on_grid_changed, force_index, surface_index)
   end
   if ui and ui.on_backend_changed then
     pcall(ui.on_backend_changed, { kind = "grid-changed", force_index = force_index })
   end
 end
 
+---@param force_index uint
+---@param surface_index uint
+---@param event GP.LayerChangeEvent
+function backend_data.notify_layer_changed(force_index, surface_index, event)
+  if render and render.on_layer_changed then
+    pcall(render.on_layer_changed, force_index, surface_index, event)
+  end
+  if ui and ui.on_backend_changed then
+    pcall(ui.on_backend_changed, { kind = "layer-changed", force_index = force_index, surface_index = surface_index, event = event })
+  end
+end
 
 ---@param force_index uint
 function backend_data.get_force(force_index)
@@ -339,25 +433,5 @@ function backend_data.get_region(force_index, region_id)
   local regions = backend_data.get_regions(force_index)
   return regions[region_id]
 end
-
----@param force_index uint
----@return table<uint, {cells: table<string, uint?>}>
-function backend_data.get_force_images(force_index)
-  local f = backend_data.ensure_force(force_index)
-  return f.images
-end
-
----@param force_index uint
----@param surface_index uint
----@param x double
----@param y double
----@return integer, integer
-function backend_data.tile_to_cell(force_index, surface_index, x, y)
-  local g = backend_data.get_grid(force_index, surface_index)
-  local cx = math.floor((x - g.x_offset) / g.width)
-  local cy = math.floor((y - g.y_offset) / g.height)
-  return cx, cy
-end
-
 
 return backend_data

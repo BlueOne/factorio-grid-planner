@@ -96,6 +96,101 @@ Migrations.migration_functions = {
         ui.rebuild_player(player.index, "migration")
       end
     end
+  end,
+  ["0.1.3"] = function()
+    -- Migration to 0.2.0: convert grids + images per surface into layers per surface.
+    if not (storage and storage.gp and storage.gp.forces) then return end
+
+    for force_index, fstate in pairs(storage.gp.forces) do
+      if fstate.grids or fstate.images then
+        local old_grids  = fstate.grids  or {}
+        local old_images = fstate.images or {}
+
+        -- Collect all surface indices mentioned in grids or images
+        local all_surfaces = {}
+        for si, _ in pairs(old_grids)  do all_surfaces[si] = true end
+        for si, _ in pairs(old_images) do all_surfaces[si] = true end
+
+        fstate.surfaces = {}
+        for surface_index, _ in pairs(all_surfaces) do
+          local g = old_grids[surface_index] or {
+            width = 8, height = 8, x_offset = 0, y_offset = 0
+          }
+          local img = old_images[surface_index]
+          local cells = (img and img.cells) or {}
+
+          fstate.surfaces[surface_index] = {
+            next_layer_id = 2,
+            layers = {
+              [1] = {
+                id = 1,
+                name = "Layer 1",
+                order = 1,
+                visible = true,
+                grid = { width = g.width, height = g.height, x_offset = g.x_offset, y_offset = g.y_offset },
+                cells = cells,
+              }
+            }
+          }
+        end
+
+        -- If no surfaces had data, create a default empty surface 1
+        if not next(fstate.surfaces) then
+          fstate.surfaces[1] = {
+            next_layer_id = 2,
+            layers = {
+              [1] = {
+                id = 1, name = "Layer 1", order = 1, visible = true,
+                grid = { width = 8, height = 8, x_offset = 0, y_offset = 0 },
+                cells = {},
+              }
+            }
+          }
+        end
+
+        ---@diagnostic disable-next-line: inject-field
+        fstate.grids  = nil
+        ---@diagnostic disable-next-line: inject-field
+        fstate.images = nil
+        log(("[Grid-Planner] Migration 0.1.3->0.2.0: Converted force %d to layers structure"):format(force_index))
+      end
+    end
+
+    -- Reset player active layer tracking and clear undo/redo (command format changed)
+    if storage.gp.players then
+      for _, pdata in pairs(storage.gp.players) do
+        pdata.active_layer_ids = {}
+        pdata.undo = {}
+        pdata.redo = {}
+      end
+    end
+
+    -- Migrate render storage from flat structure (surfaces -> cells + corners)
+    -- to layered structure (surfaces -> layers -> cells + corners).
+    -- All existing render objects are moved into layer 1 to match the data migration above.
+    if storage.gp_render and storage.gp_render.forces then
+      for _, old_fstate in pairs(storage.gp_render.forces) do
+        for _, surf in pairs(old_fstate.surfaces or {}) do
+          surf.layers = {
+            [1] = {
+              cells   = surf.cells   or {},
+              corners = surf.corners or {},
+            }
+          }
+          ---@diagnostic disable-next-line: inject-field
+          surf.cells   = nil
+          ---@diagnostic disable-next-line: inject-field
+          surf.corners = nil
+        end
+      end
+    end
+
+    -- Rebuild UI for all players
+    for _, player in pairs(game.players) do
+      ui.rebuild_player(player.index, "migration")
+    end
+
+    game.print("[Grid-Planner]: Migration 0.1.3->0.2.0: Layers feature added. Existing data converted to Layer 1.")
   end
 }
 
@@ -121,12 +216,17 @@ function Migrations.on_configuration_changed(event)
   local new_version = event.mod_changes["grid-planner"].new_version
   if new_version == old_version or new_version == nil then return end
 
-  -- run all migration functions between old_version (exclusive) and new_version (inclusive)
-  for v, f in pairs(Migrations.migration_functions) do
+  -- collect and sort migration keys ascending so they always run in version order
+  local versions = {}
+  for v in pairs(Migrations.migration_functions) do versions[#versions+1] = v end
+  table.sort(versions, function(a, b) return version_greater(b, a) end)
+
+  -- run all migration functions between old_version (inclusive) and new_version (exclusive)
+  for _, v in ipairs(versions) do
     if (not version_greater(old_version, v)) and version_greater(new_version, v) then
       log("Running migration for version " .. v)
       game.print("[Grid-Planner]: Running migration for version " .. v)
-      f()
+      Migrations.migration_functions[v]()
     end
   end
 end

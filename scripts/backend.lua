@@ -70,7 +70,7 @@ function backend.edit_region_internal(force_index, id, name, color)
   if (name and name ~= prev.name) or (color and (color.r ~= prev.color.r or color.g ~= prev.color.g or color.b ~= prev.color.b)) then
     local name_only_changed = (name and name ~= prev.name) and not (color and (color.r ~= prev.color.r or color.g ~= prev.color.g or color.b ~= prev.color.b))
     local change_type = name_only_changed and backend.REGION_CHANGE_TYPE.NAME_MODIFIED or backend.REGION_CHANGE_TYPE.MODIFIED
-        
+
     backend.notify_regions_changed(force_index, {
       type = change_type,
       region_id = id,
@@ -92,25 +92,24 @@ function backend.run_command(player_index, cmd)
     error("Invalid command: missing type")
     return false
   end
-  
+
   local handler = backend.commands[cmd.type]
   if not handler then
     error("Unknown command type: " .. tostring(cmd.type))
     return false
   end
-  
+
   local success = handler.perform(cmd)
   if success and handler.undo then
     -- Add description to command
     cmd.description = handler.description(cmd)
     push_undo(player_index, cmd)
   end
-  
+
   return success
 end
 
 ---Migration helper: clear old-format undo/redo queues for a player.
----Call this to purge queues when migrating from old action format to new command format.
 ---@param player_index uint
 function backend.clear_undo_redo(player_index)
   local p = backend.ensure_player(player_index)
@@ -134,7 +133,6 @@ end
 
 
 ---Move a region's order up or down by a delta amount.
----Adjusts region orders between source and target to maintain contiguity.
 ---@param force_index uint
 ---@param player_index uint
 ---@param id uint Region ID to move
@@ -189,17 +187,19 @@ function backend.can_redo(player_index)
   return (p.redo and #p.redo or 0) > 0
 end
 
+---Fill a rectangle on a specific layer with the given region (or erase if region_id is nil).
 ---@param player_index uint
 ---@param force_index uint
 ---@param surface_index uint
+---@param layer_id uint
 ---@param region_id uint|nil
 ---@param left_top MapPosition
 ---@param right_bottom MapPosition
 ---@return number affected_count
-function backend.fill_rectangle(player_index, force_index, surface_index, region_id, left_top, right_bottom)
-  local f = backend.ensure_force(force_index)
-  local surf = backend.get_surface_image(force_index, surface_index)
-  local g = backend.get_grid(force_index, surface_index)
+function backend.fill_rectangle(player_index, force_index, surface_index, layer_id, region_id, left_top, right_bottom)
+  local layer = backend.get_layer(force_index, surface_index, layer_id)
+  if not layer then return 0 end
+  local g = layer.grid
 
   local cx1 = math.floor((left_top.x - g.x_offset) / g.width)
   local cy1 = math.floor((left_top.y - g.y_offset) / g.height)
@@ -216,7 +216,7 @@ function backend.fill_rectangle(player_index, force_index, surface_index, region
   for x = minx, maxx do
     for y = miny, maxy do
       local key = backend.cell_key(x, y)
-      local prev = surf.cells[key]
+      local prev = layer.cells[key]
       if prev == backend.EMPTY_REGION_ID then prev = nil end
       if prev ~= assign_id then
         affected[key] = { prev = prev }
@@ -226,10 +226,10 @@ function backend.fill_rectangle(player_index, force_index, surface_index, region
   end
 
   if count > 0 then
-    local cmd = backend.commands["draw_cells"].create(force_index, player_index, surface_index, affected, assign_id)
+    local cmd = backend.commands["draw_cells"].create(force_index, player_index, surface_index, layer_id, affected, assign_id)
     backend.run_command(player_index, cmd)
   end
-  
+
   return count
 end
 
@@ -239,16 +239,14 @@ function backend.undo(player_index)
   local p = backend.ensure_player(player_index)
   local cmd = table.remove(p.undo)
   if not cmd then return false end
-  
-  -- Handle both old action format and new command format
+
   local handler = backend.commands[cmd.type]
   if handler and handler.undo then
     handler.undo(cmd)
   else
-    -- Unknown command type, log warning and skip
     log("Warning: Cannot undo unknown command type: " .. tostring(cmd.type))
   end
-  
+
   p.redo[#p.redo+1] = cmd
   if ui and ui.on_backend_changed then
     pcall(ui.on_backend_changed, { kind = "undo-redo-changed", player_index = player_index })
@@ -261,16 +259,14 @@ function backend.redo(player_index)
   local p = backend.ensure_player(player_index)
   local cmd = table.remove(p.redo)
   if not cmd then return false end
-  
-  -- Handle both old action format and new command format
+
   local handler = backend.commands[cmd.type]
   if handler and handler.perform then
     handler.perform(cmd)
   else
-    -- Unknown command type, log warning and skip
     log("Warning: Cannot redo unknown command type: " .. tostring(cmd.type))
   end
-  
+
   p.undo[#p.undo+1] = cmd
   if ui and ui.on_backend_changed then
     pcall(ui.on_backend_changed, { kind = "undo-redo-changed", player_index = player_index })
@@ -278,25 +274,28 @@ function backend.redo(player_index)
   return true
 end
 
+---Change the grid properties for a specific layer, optionally reprojecting existing cells.
 ---@param force_index uint
 ---@param surface_index uint
+---@param layer_id uint
 ---@param player_index uint
 ---@param new_props GP.Grid
 ---@param opts {reproject: boolean}|nil
-function backend.set_grid(force_index, surface_index, player_index, new_props, opts)
-  local f = backend.ensure_force(force_index)
-  local old = backend.ensure_grid(force_index, surface_index)
+function backend.set_grid(force_index, surface_index, layer_id, player_index, new_props, opts)
+  local layer = backend.get_layer(force_index, surface_index, layer_id)
+  if not layer then return end
+  local old = layer.grid
   local reproject = opts and opts.reproject
-  
+
   local new_grid = {
     width = new_props.width or old.width,
     height = new_props.height or old.height,
     x_offset = new_props.x_offset or old.x_offset,
     y_offset = new_props.y_offset or old.y_offset,
   }
-  
+
   if not reproject then
-    local cmd = backend.commands["grid"].create(force_index, player_index, surface_index, old, new_grid)
+    local cmd = backend.commands["grid"].create(force_index, player_index, surface_index, layer_id, old, new_grid)
     backend.run_command(player_index, cmd)
     return "Update grid properties"
   end
@@ -307,11 +306,10 @@ function backend.set_grid(force_index, surface_index, player_index, new_props, o
   local new_x_offset = new_grid.x_offset
   local new_y_offset = new_grid.y_offset
   local epsilon = 0.0001
-  
-  local surface = backend.get_surface_image(force_index, surface_index)
-  local before_map = surface.cells
+
+  local before_map = layer.cells
   local after_map = {}
-  
+
   for key, region_id in pairs(before_map) do
     local ocx, ocy = backend.parse_cell_key(key)
     local x0 = ocx * old.width + old.x_offset
@@ -332,12 +330,82 @@ function backend.set_grid(force_index, surface_index, player_index, new_props, o
       end
     end
   end
-  
-  local cmd = backend.commands["reproject"].create(force_index, player_index, surface_index, old, new_grid, before_map, after_map)
+
+  local cmd = backend.commands["reproject"].create(force_index, player_index, surface_index, layer_id, old, new_grid, before_map, after_map)
   backend.run_command(player_index, cmd)
   return "Reproject and update grid properties"
 end
 
 
-return backend
+-- Layer management -----------------------------------------------------------
 
+---Add a new layer to a surface, copying grid config from the player's active layer.
+---@param force_index uint
+---@param player_index uint
+---@param surface_index uint
+---@param name string
+---@return uint layer_id
+function backend.add_layer(force_index, player_index, surface_index, name)
+  local active = backend.get_active_layer(player_index, force_index, surface_index)
+  local grid = active and active.grid or backend.DEFAULT_GRID
+  local cmd = backend.commands["layer-add"].create(force_index, player_index, surface_index, name, grid)
+  backend.run_command(player_index, cmd)
+  return cmd.layer_id
+end
+
+---Delete a layer. Fails silently if only one layer exists.
+---@param force_index uint
+---@param player_index uint
+---@param surface_index uint
+---@param layer_id uint
+function backend.delete_layer(force_index, player_index, surface_index, layer_id)
+  local ok, err = pcall(function()
+    local cmd = backend.commands["layer-delete"].create(force_index, player_index, surface_index, layer_id)
+    backend.run_command(player_index, cmd)
+  end)
+  if not ok then
+    log("Warning: Cannot delete layer: " .. tostring(err))
+  end
+end
+
+---Rename a layer.
+---@param force_index uint
+---@param player_index uint
+---@param surface_index uint
+---@param layer_id uint
+---@param name string
+function backend.rename_layer(force_index, player_index, surface_index, layer_id, name)
+  local cmd = backend.commands["layer-edit"].create(force_index, player_index, surface_index, layer_id, name)
+  backend.run_command(player_index, cmd)
+end
+
+---Move a layer up or down by a delta.
+---@param force_index uint
+---@param player_index uint
+---@param surface_index uint
+---@param layer_id uint
+---@param delta int
+function backend.move_layer(force_index, player_index, surface_index, layer_id, delta)
+  if delta == 0 then return end
+  local ok, err = pcall(function()
+    local cmd = backend.commands["layer-move"].create(force_index, player_index, surface_index, layer_id, delta)
+    backend.run_command(player_index, cmd)
+  end)
+  if not ok then
+    log("Warning: Cannot move layer: " .. tostring(err))
+  end
+end
+
+---Set the visibility of a layer.
+---@param force_index uint
+---@param player_index uint
+---@param surface_index uint
+---@param layer_id uint
+---@param visible boolean
+function backend.set_layer_visibility(force_index, player_index, surface_index, layer_id, visible)
+  local cmd = backend.commands["layer-visibility"].create(force_index, player_index, surface_index, layer_id, visible)
+  backend.run_command(player_index, cmd)
+end
+
+
+return backend

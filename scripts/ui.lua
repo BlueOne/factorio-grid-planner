@@ -43,7 +43,6 @@ end
 ---@param handler function Event handler for slider changes
 ---@return table Flow definition containing the sliders and preview
 local function build_color_picker(r, g, b, handler)
-  -- Helper: create a color slider row
   local function color_slider_row(label, name, value)
     return {
       type = "flow", direction = "horizontal",
@@ -54,7 +53,7 @@ local function build_color_picker(r, g, b, handler)
       }
     }
   end
-  
+
   return {
     type = "flow",
     direction = "vertical",
@@ -143,11 +142,6 @@ local function update_visibility_label(dlg, idx)
 end
 
 -- Helper: update color preview progressbar from current slider values
----@param dlg LuaGuiElement Dialog frame
----@param preview_name string Element name of color preview progressbar
----@param r_name string Element name of red slider
----@param g_name string Element name of green slider
----@param b_name string Element name of blue slider
 local function update_color_preview(dlg, preview_name, r_name, g_name, b_name)
   local r_elem = find_child(dlg, r_name)
   local g_elem = find_child(dlg, g_name)
@@ -164,7 +158,7 @@ end
 -- UI event handlers
 local handlers = {}
 
--- Pipette handler: select region under cursor if any
+-- Pipette handler: sample all visible layers (topmost = highest order wins)
 function handlers.pipette(e)
   if e.in_gui then return end
   local player = game.get_player(e.player_index)
@@ -173,35 +167,26 @@ function handlers.pipette(e)
   if not pos then return end
   local force_index = player.force.index
   local surface_index = player.surface.index
-  local img = backend.get_surface_image(force_index, surface_index)
-  local cx, cy = backend.tile_to_cell(force_index, surface_index, pos.x, pos.y)
-  local region_id = backend.get_from_image(img, cx, cy)
-  if region_id and region_id ~= 0 then
-    backend.set_selected_region_id(player.index, region_id)
+  local sorted_layers = backend.get_sorted_layers(force_index, surface_index)
+  local found_region_id = nil
+  for i = #sorted_layers, 1, -1 do
+    local layer = sorted_layers[i]
+    if layer.visible then
+      local cx, cy = backend.tile_to_cell_layer(layer, pos.x, pos.y)
+      local region_id = backend.get_from_layer(layer, cx, cy)
+      if region_id and region_id ~= 0 then
+        found_region_id = region_id
+        break
+      end
+    end
+  end
+  if found_region_id then
+    backend.set_selected_region_id(player.index, found_region_id)
     ui.rebuild_player(player.index, "pipette")
   end
 end
 
 -- Register dialogs with their handlers
-dialog.register("gp_properties_dialog", {
-  on_confirm = function(dlg, player)
-    local g = backend.get_grid(player.force.index, player.surface.index)
-    local size_elem = find_child(dlg, "gp_prop_size")
-    local x_offset_elem = find_child(dlg, "gp_prop_x_offset")
-    local y_offset_elem = find_child(dlg, "gp_prop_y_offset")
-    local size = tonumber(size_elem and size_elem.text) or g.width or g.height or 32
-    local reproject_elem = find_child(dlg, "gp_prop_reproject")
-    local new_props = {
-      width = size,
-      height = size,
-      x_offset = tonumber(x_offset_elem and x_offset_elem.text) or g.x_offset or 0,
-      y_offset = tonumber(y_offset_elem and y_offset_elem.text) or g.y_offset or 0,
-    }
-    local reproject = (reproject_elem and reproject_elem.state) or false
-    backend.set_grid(player.force.index, player.surface_index, player.index, new_props, { reproject = reproject })
-  end
-})
-
 dialog.register("gp_visibility_dialog", {
   on_confirm = function(dlg, player)
     local idx = dlg.tags and tonumber(dlg.tags.visibility_index)
@@ -218,12 +203,51 @@ dialog.register("gp_region_dialog", {
     local g = tags.color_g or 255
     local b = tags.color_b or 255
     local color = { r = r/255, g = g/255, b = b/255, a = 1 }
-    
+
     local region_id = tonumber(tags.region_id)
     if region_id then
       backend.edit_region(player.force.index, player.index, region_id, name, color)
     else
       backend.add_region(player.force.index, player.index, name, color)
+    end
+  end
+})
+
+-- Layer edit dialog: handles rename + grid properties for a specific layer
+dialog.register("gp_layer_dialog", {
+  on_confirm = function(dlg, player)
+    local tags = dlg.tags or {}
+    local layer_id = tonumber(tags.layer_id)
+    local surface_index = tonumber(tags.surface_index) or player.surface.index
+    if not layer_id then return end
+    local layer = backend.get_layer(player.force.index, surface_index, layer_id)
+    if not layer then return end
+
+    -- Rename if name changed
+    local name_elem = find_child(dlg, "gp_layer_name")
+    local name = name_elem and name_elem.text or ""
+    if name ~= "" and name ~= layer.name then
+      backend.rename_layer(player.force.index, player.index, surface_index, layer_id, name)
+    end
+
+    -- Update grid if values changed
+    local size_elem = find_child(dlg, "gp_layer_prop_size")
+    local x_offset_elem = find_child(dlg, "gp_layer_prop_x_offset")
+    local y_offset_elem = find_child(dlg, "gp_layer_prop_y_offset")
+    local reproject_elem = find_child(dlg, "gp_layer_prop_reproject")
+    local size = tonumber(size_elem and size_elem.text) or layer.grid.width
+    local new_props = {
+      width = size,
+      height = size,
+      x_offset = tonumber(x_offset_elem and x_offset_elem.text) or layer.grid.x_offset,
+      y_offset = tonumber(y_offset_elem and y_offset_elem.text) or layer.grid.y_offset,
+    }
+    local reproject = (reproject_elem and reproject_elem.state) or false
+    local grid_changed = new_props.width ~= layer.grid.width
+      or new_props.x_offset ~= layer.grid.x_offset
+      or new_props.y_offset ~= layer.grid.y_offset
+    if grid_changed then
+      backend.set_grid(player.force.index, surface_index, layer_id, player.index, new_props, { reproject = reproject })
     end
   end
 })
@@ -238,9 +262,7 @@ dialog.register("gp_region_dialog", {
 ---Called by backend when data changes; UI can rebuild or update selectively.
 ---@param change GP.UiChange
 function ui.on_backend_changed(change)
-  -- Rebuild all players' UI to reflect changes.
   if storage and storage.gp_ui and storage.gp_ui.is_building then
-    -- Skip rebuild while UI is mid-build to avoid invalidating elements.
     return
   end
   if game and game.players then
@@ -252,9 +274,9 @@ end
 
 ---Rebuild the UI for a single player.
 ---@param player_index uint
----@param reason string|nil Reason for rebuild ("backend-changed", "init", "player-created", etc.)
+---@param reason string|nil Reason for rebuild (informational only)
 function ui.rebuild_player(player_index, reason)
-  -- Prevent re-entrant rebuild (e.g., backend default region init triggering ui.on_backend_changed while building).
+  local _ = reason
   storage.gp_ui = storage.gp_ui or {}
   if storage.gp_ui.is_building then
     return
@@ -263,7 +285,6 @@ function ui.rebuild_player(player_index, reason)
   local player = game.get_player(player_index)
   if not player then storage.gp_ui.is_building = false; return end
   local frame = ensure_main_frame(player)
-  -- Rebuild panel contents while preserving visibility state
   local was_visible = frame.visible
   frame.clear()
 
@@ -282,7 +303,14 @@ function ui.rebuild_player(player_index, reason)
     })
   end
 
-  -- Custom header: title + spacer + Properties, Undo, Redo buttons
+  -- Edit mode state (shared for both layers and regions panels)
+  local show_edit = true
+  if storage.gp_ui and storage.gp_ui.players and storage.gp_ui.players[player_index] then
+    local se = storage.gp_ui.players[player_index].show_edit_buttons
+    if se ~= nil then show_edit = se end
+  end
+
+  -- Header: title + spacer + Undo, Redo, Edit, Visibility, Close buttons
   flib_gui.add(frame, {
     type = "flow",
     direction = "horizontal",
@@ -290,10 +318,10 @@ function ui.rebuild_player(player_index, reason)
     children = {
       { type = "label", caption = {"grid-planner.mod-name"}, style = "frame_title", style_mods = { top_padding = -3 }},
       { type = "empty-widget", style_mods = { horizontally_stretchable = true, height = 24 }, style = "draggable_space" },
-      { 
-        type = "sprite-button", 
-        name = "gp_undo", 
-        sprite = "gp-undo-icon-light", 
+      {
+        type = "sprite-button",
+        name = "gp_undo",
+        sprite = "gp-undo-icon-light",
         style = "frame_action_button",
         handler = handlers.undo,
         elem_mods = {
@@ -301,7 +329,7 @@ function ui.rebuild_player(player_index, reason)
           tooltip = {"tooltips.tooltip-undo", backend.peek_undo_description(player_index) or "None"}
         }
       },
-      { 
+      {
         type = "sprite-button",
         name = "gp_redo",
         sprite = "gp-redo-icon-light",
@@ -322,11 +350,12 @@ function ui.rebuild_player(player_index, reason)
       },
       {
         type = "sprite-button",
-        name = "gp_properties_open",
+        name = "gp_edit_toggle",
         sprite = "gp-edit-light-16",
         style = "frame_action_button",
-        handler = handlers.properties_open,
-        tooltip = "Grid properties"
+        handler = handlers.regions_edit_toggle,
+        tooltip = "Show edit buttons",
+        elem_mods = { toggled = show_edit },
       },
       {
         type = "sprite-button",
@@ -339,7 +368,7 @@ function ui.rebuild_player(player_index, reason)
     }
   })
 
-  -- Tools row: Rectangle
+  -- Tools row
   flib_gui.add(frame, {
     type = "flow",
     direction = "horizontal",
@@ -364,29 +393,140 @@ function ui.rebuild_player(player_index, reason)
     }
   })
 
-  -- Get edit mode state
-  local show_edit = true
-  if storage.gp_ui and storage.gp_ui.players and storage.gp_ui.players[player_index] then
-    local se = storage.gp_ui.players[player_index].show_edit_buttons
-    if se ~= nil then show_edit = se end
+  local force_index = player.force.index
+  local surface_index = player.surface.index
+
+  -- =========================================================================
+  -- Layers panel
+  -- =========================================================================
+  flib_gui.add(frame, { type = "label", caption = "Layers", style = "frame_title" })
+
+  local _, layers_scroll = flib_gui.add(frame, {
+    type = "scroll-pane",
+    name = "gp_layers_scroll",
+    style = "flib_naked_scroll_pane",
+    horizontal_scroll_policy = "never",
+    vertical_scroll_policy = "auto",
+    style_mods = {
+      minimal_height = 60,
+      maximal_height = 200,
+      horizontally_stretchable = true,
+      padding = 4,
+    }
+  })
+
+  local _, layers_frame = flib_gui.add(layers_scroll, {
+    type = "frame",
+    name = "gp_layers_frame",
+    direction = "vertical",
+    style = "inside_deep_frame",
+    style_mods = { minimal_width = 300, padding = 8 }
+  })
+
+  local _, layers_list = flib_gui.add(layers_frame, {
+    type = "flow",
+    name = "gp_layers_flow",
+    direction = "vertical",
+    style_mods = { vertical_spacing = 0 }
+  })
+
+  local sorted_layers = backend.get_sorted_layers(force_index, surface_index)
+  local active_layer_id = backend.get_active_layer_id(player_index, surface_index)
+  -- If no active layer set, default to first
+  if not active_layer_id and sorted_layers[1] then
+    active_layer_id = sorted_layers[1].id
+    backend.set_active_layer_id(player_index, surface_index, active_layer_id)
+  end
+  local layer_count = #sorted_layers
+
+  local function add_layer_row(layer, is_active, is_first, is_last)
+    local vis_sprite = layer.visible and "gp-visibility-light-16" or "gp-visibility-dark-16"
+    flib_gui.add(layers_list, {
+      type = "flow",
+      direction = "horizontal",
+      style_mods = { horizontally_stretchable = true },
+      children = {
+        {
+          type = "frame",
+          style = "gp_region_row_frame",
+          style_mods = { top_padding = 3, bottom_padding = 1, left_padding = 0, right_padding = 0, minimal_width = 0 },
+          children = {
+            {
+              type = "sprite-button",
+              name = ("gp_layer_vis_%d"):format(layer.id),
+              sprite = vis_sprite,
+              style = "gp_icon_button",
+              handler = handlers.layer_toggle_visibility,
+              tags = { layer_id = layer.id, surface_index = surface_index },
+              tooltip = layer.visible and "Hide layer" or "Show layer",
+            },
+          }
+        },
+        {
+          type = "button",
+          name = ("gp_layer_select_%d"):format(layer.id),
+          style = "gp_region_row_button",
+          style_mods = { horizontally_stretchable = true },
+          toggled = is_active,
+          caption = layer.name,
+          handler = handlers.layer_select,
+          tags = { layer_id = layer.id, surface_index = surface_index },
+          tooltip = layer.name,
+        },
+        {
+          type = "frame",
+          name = ("gp_layer_edit_frame_%d"):format(layer.id),
+          style = "gp_region_row_frame",
+          elem_mods = { visible = show_edit },
+          children = {
+            {
+              type = "flow",
+              direction = "horizontal",
+              style_mods = { horizontal_spacing = 4 },
+              children = {
+                { type = "sprite-button", name = ("gp_layer_up_%d"):format(layer.id),   sprite = "gp-up-dark-32",   style = "gp_icon_button", tooltip = "Move up",   handler = handlers.layer_move_up,   tags = { layer_id = layer.id, surface_index = surface_index }, elem_mods = { enabled = not is_first } },
+                { type = "sprite-button", name = ("gp_layer_down_%d"):format(layer.id), sprite = "gp-down-dark-32", style = "gp_icon_button", tooltip = "Move down", handler = handlers.layer_move_down, tags = { layer_id = layer.id, surface_index = surface_index }, elem_mods = { enabled = not is_last } },
+                { type = "sprite-button", name = ("gp_layer_edit_%d"):format(layer.id), sprite = "gp-edit-dark-32", style = "gp_icon_button", tooltip = "Edit layer (name, grid size, offset)", handler = handlers.layer_edit_open, tags = { layer_id = layer.id, surface_index = surface_index } },
+                { type = "sprite-button", name = ("gp_layer_del_%d"):format(layer.id),  sprite = "utility/trash",   style = "gp_icon_button_red", tooltip = "Delete layer", handler = handlers.layer_delete, tags = { layer_id = layer.id, surface_index = surface_index }, elem_mods = { enabled = layer_count > 1 } },
+              }
+            }
+          }
+        }
+      }
+    })
   end
 
-  -- Regions list header with edit toggle
+  for idx, layer in ipairs(sorted_layers) do
+    add_layer_row(layer, layer.id == active_layer_id, idx == 1, idx == layer_count)
+  end
+
+  if show_edit then
+    flib_gui.add(layers_list, {
+      type = "frame",
+      name = "gp_layer_add_outer",
+      style = "gp_region_row_frame",
+      style_mods = { horizontally_stretchable = true },
+      children = {
+        {
+          type = "button",
+          name = "gp_layer_add",
+          caption = "＋ Add Layer",
+          handler = handlers.layer_add,
+          style_mods = { horizontally_stretchable = true, vertically_stretchable = true }
+        }
+      }
+    })
+  end
+
+  -- =========================================================================
+  -- Regions panel
+  -- =========================================================================
   flib_gui.add(frame, {
     type = "flow",
     direction = "horizontal",
     style_mods = { vertical_align = "center" },
     children = {
       { type = "label", caption = "Regions", style = "frame_title" },
-      { type = "empty-widget", style_mods = { horizontally_stretchable = true } },
-      { 
-        type = "checkbox", 
-        name = "gp_regions_edit_toggle", 
-        state = show_edit, 
-        caption = "Edit", 
-        handler = handlers.regions_edit_toggle, 
-        tooltip = "Show region edit buttons" 
-      }
     }
   })
 
@@ -398,12 +538,12 @@ function ui.rebuild_player(player_index, reason)
     vertical_scroll_policy = "auto",
     style_mods = {
       minimal_height = 100,
-      maximal_height = 600,
+      maximal_height = 400,
       horizontally_stretchable = true,
       padding = 4,
     }
   })
-  
+
   local _, frame_list = flib_gui.add(scroll, {
     type = "frame",
     name = "gp_regions_frame",
@@ -418,16 +558,15 @@ function ui.rebuild_player(player_index, reason)
     direction = "vertical",
     style_mods = { vertical_spacing = 0 }
   })
-  
+
   if not list or not list.valid then
     storage.gp_ui.is_building = false
     return
   end
-  local force_index = player.force.index
+
   local f = backend.get_force(force_index)
   local selected_id = backend.get_selected_region_id(player_index) or 0
 
-  -- Ensure a valid selection if any regions exist
   if selected_id == 0 or not (f and f.regions and f.regions[selected_id]) then
     local first_id = nil
     if f and f.regions then
@@ -443,11 +582,9 @@ function ui.rebuild_player(player_index, reason)
     end
   end
 
-  -- Helper to render a single region row
-  local function add_region_row(id, name, color, is_first, is_last, show_edit)
+  local function add_region_row(id, name, color, is_first, is_last)
     local select_name = "gp_region_select_" .. tostring(id)
     local delete_name = "gp_region_delete_" .. tostring(id)
-    -- Row: selectable button
 
     flib_gui.add(list, {
       type = "flow",
@@ -494,7 +631,6 @@ function ui.rebuild_player(player_index, reason)
             {
               type = "flow",
               direction = "horizontal",
-              
               style_mods = { horizontal_spacing = 4 },
               children = {
                 {
@@ -544,9 +680,7 @@ function ui.rebuild_player(player_index, reason)
     })
   end
 
-  -- Regions
   if f and f.regions then
-    -- Collect and sort non-empty regions by order
     local regions_list = {}
     for id, z in pairs(f.regions) do
       if id ~= 0 then
@@ -554,17 +688,16 @@ function ui.rebuild_player(player_index, reason)
       end
     end
     table.sort(regions_list, function(a, b) return a.region.order < b.region.order end)
-    
+
     for idx, entry in ipairs(regions_list) do
       local id = entry.id
       local z = entry.region
       local is_first = (idx == 1)
       local is_last = (idx == #regions_list)
-      add_region_row(id, z.name, z.color or {r=1,g=1,b=1,a=1}, is_first, is_last, show_edit)
+      add_region_row(id, z.name, z.color or {r=1,g=1,b=1,a=1}, is_first, is_last)
     end
   end
 
-  -- Add Region button below table, full-width
   if show_edit then
     flib_gui.add(list, {
       type = "frame",
@@ -594,28 +727,10 @@ function handlers.toggle_main_frame(e)
   if player then
     local frame = ensure_main_frame(player)
     frame.visible = not frame.visible
-    -- Enable alt mode when opening UI
     if frame.visible then
       player.game_view_settings.show_entity_info = true
     end
   end
-end
-
-function handlers.properties_open(e)
-  local player = game.get_player(e.player_index)
-  if not player then return end
-  local g = backend.get_grid(player.force.index, player.surface.index)
-  dialog.create(player, {
-    name = "gp_properties_dialog",
-    title = "Properties",
-    location = e.cursor_display_location,
-    children = {
-      labeled_textfield("Size", "gp_prop_size", g.width or g.height or 32),
-      labeled_textfield("X offset", "gp_prop_x_offset", g.x_offset or 0),
-      labeled_textfield("Y offset", "gp_prop_y_offset", g.y_offset or 0),
-      { type = "checkbox", name = "gp_prop_reproject", state = true, caption = "Reproject existing cells" }
-    }
-  })
 end
 
 function handlers.visibility_open(e)
@@ -691,7 +806,6 @@ function handlers.undo(e)
   local player = game.get_player(e.player_index)
   if player then
     backend.undo(player.index)
-    -- UI rebuild triggered by backend notification
   end
 end
 
@@ -699,7 +813,6 @@ function handlers.redo(e)
   local player = game.get_player(e.player_index)
   if player then
     backend.redo(player.index)
-    -- UI rebuild triggered by backend notification
   end
 end
 
@@ -729,6 +842,96 @@ function handlers.select_tool_rect(e)
     backend.set_selected_tool(player.index, "rect")
   end
 end
+
+-- Layer handlers -------------------------------------------------------------
+
+function handlers.layer_select(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local tags = e.element.tags or {}
+  local layer_id = tonumber(tags.layer_id)
+  local surface_index = tonumber(tags.surface_index) or player.surface.index
+  if not layer_id then return end
+  backend.set_active_layer_id(player.index, surface_index, layer_id)
+  ui.rebuild_player(player.index, "layer-selected")
+end
+
+function handlers.layer_toggle_visibility(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local tags = e.element.tags or {}
+  local layer_id = tonumber(tags.layer_id)
+  local surface_index = tonumber(tags.surface_index) or player.surface.index
+  if not layer_id then return end
+  local layer = backend.get_layer(player.force.index, surface_index, layer_id)
+  if not layer then return end
+  backend.set_layer_visibility(player.force.index, player.index, surface_index, layer_id, not layer.visible)
+end
+
+function handlers.layer_add(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local surface_index = player.surface.index
+  local layer_id = backend.add_layer(player.force.index, player.index, surface_index, "New Layer")
+  backend.set_active_layer_id(player.index, surface_index, layer_id)
+  ui.rebuild_player(player.index, "layer-added")
+end
+
+function handlers.layer_delete(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local tags = e.element.tags or {}
+  local layer_id = tonumber(tags.layer_id)
+  local surface_index = tonumber(tags.surface_index) or player.surface.index
+  if not layer_id then return end
+  backend.delete_layer(player.force.index, player.index, surface_index, layer_id)
+end
+
+function handlers.layer_move_up(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local tags = e.element.tags or {}
+  local layer_id = tonumber(tags.layer_id)
+  local surface_index = tonumber(tags.surface_index) or player.surface.index
+  if not layer_id then return end
+  backend.move_layer(player.force.index, player.index, surface_index, layer_id, -1)
+end
+
+function handlers.layer_move_down(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local tags = e.element.tags or {}
+  local layer_id = tonumber(tags.layer_id)
+  local surface_index = tonumber(tags.surface_index) or player.surface.index
+  if not layer_id then return end
+  backend.move_layer(player.force.index, player.index, surface_index, layer_id, 1)
+end
+
+function handlers.layer_edit_open(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  local tags = e.element.tags or {}
+  local layer_id = tonumber(tags.layer_id)
+  local surface_index = tonumber(tags.surface_index) or player.surface.index
+  if not layer_id then return end
+  local layer = backend.get_layer(player.force.index, surface_index, layer_id)
+  if not layer then return end
+  local dlg = dialog.create(player, {
+    name = "gp_layer_dialog",
+    title = "Edit Layer",
+    location = e.cursor_display_location,
+    children = {
+      labeled_textfield("Name", "gp_layer_name", layer.name),
+      labeled_textfield("Size", "gp_layer_prop_size", layer.grid.width),
+      labeled_textfield("X offset", "gp_layer_prop_x_offset", layer.grid.x_offset),
+      labeled_textfield("Y offset", "gp_layer_prop_y_offset", layer.grid.y_offset),
+      { type = "checkbox", name = "gp_layer_prop_reproject", state = true, caption = "Reproject existing cells" }
+    }
+  })
+  dlg.tags = { layer_id = layer_id, surface_index = surface_index }
+end
+
+-- Region handlers ------------------------------------------------------------
 
 function handlers.region_add(e)
   local player = game.get_player(e.player_index)
@@ -784,7 +987,6 @@ function handlers.region_delete(e)
   local id = e.element.tags and tonumber(e.element.tags.region_id)
   if not id then return end
   backend.delete_region(player.force.index, player.index, id, 0)
-  -- UI rebuild triggered by backend notification
 end
 
 function handlers.color_slider_changed(e)
@@ -794,8 +996,7 @@ function handlers.color_slider_changed(e)
   if not element or not element.valid then return end
   local dlg = player.gui.screen["gp_region_dialog"]
   if not dlg or not dlg.valid then return end
-  
-  -- Update tags based on which slider changed
+
   local tags = dlg.tags or {}
   if element.name == "gp_color_r" then
     tags.color_r = element.slider_value
@@ -807,8 +1008,7 @@ function handlers.color_slider_changed(e)
     return
   end
   dlg.tags = tags
-  
-  -- Update preview
+
   update_color_preview(dlg, "gp_color_preview", "gp_color_r", "gp_color_g", "gp_color_b")
 end
 
@@ -818,7 +1018,6 @@ function handlers.region_row_select(e)
   local id = e.element.tags and tonumber(e.element.tags.region_id)
   if not id then return end
   backend.set_selected_region_id(player.index, id)
-  -- Rebuild to update selection highlight immediately
   ui.rebuild_player(player.index, "region-selected")
 end
 
@@ -827,16 +1026,10 @@ function handlers.region_move_up(e)
   if not player then return end
   local id = e.element.tags and tonumber(e.element.tags.region_id)
   if not id then return end
-    local value = 1
-  if e.shift then
-    value = 5
-  end
-  if e.control then
-    value = 50
-  end
-
+  local value = 1
+  if e.shift then value = 5 end
+  if e.control then value = 50 end
   backend.move_region(player.force.index, player.index, id, -value)
-  -- UI rebuild triggered by backend notification
 end
 
 function handlers.region_move_down(e)
@@ -845,27 +1038,22 @@ function handlers.region_move_down(e)
   local id = e.element.tags and tonumber(e.element.tags.region_id)
   if not id then return end
   local value = 1
-  if e.shift then
-    value = 5
-  end
-  if e.control then
-    value = 50
-  end
+  if e.shift then value = 5 end
+  if e.control then value = 50 end
   backend.move_region(player.force.index, player.index, id, value)
-  -- UI rebuild triggered by backend notification
 end
 
 function handlers.regions_edit_toggle(e)
   local player = game.get_player(e.player_index)
   if not player then return end
-  local checked = e.element.state
-  
-  -- Store state
+
   storage.gp_ui = storage.gp_ui or {}
   storage.gp_ui.players = storage.gp_ui.players or {}
   storage.gp_ui.players[e.player_index] = storage.gp_ui.players[e.player_index] or {}
-  storage.gp_ui.players[e.player_index].show_edit_buttons = checked
-  
+  local current = storage.gp_ui.players[e.player_index].show_edit_buttons
+  if current == nil then current = true end
+  storage.gp_ui.players[e.player_index].show_edit_buttons = not current
+
   ui.rebuild_player(e.player_index, "edit-toggle")
 end
 
@@ -899,8 +1087,7 @@ ui.events["gp-pipette"] = handlers.pipette
 function ui.events.on_gui_closed(event)
   local player = game.get_player(event.player_index)
   if not player or not player.valid then return end
-  
-  -- When player presses escape on a dialog, close it
+
   local parent = player.gui.screen
   for _, name in ipairs(dialog.get_all_names()) do
     local dlg = parent[name]
@@ -914,8 +1101,7 @@ end
 function ui.events.on_gui_confirmed(event)
   local player = game.get_player(event.player_index)
   if not player or not player.valid then return end
-  
-  -- When player presses enter on a dialog, call its confirm handler and close it
+
   local parent = player.gui.screen
   for _, name in ipairs(dialog.get_all_names()) do
     local dlg = parent[name]
@@ -929,7 +1115,5 @@ function ui.events.on_gui_confirmed(event)
     end
   end
 end
-
--- All value_changed and checked_state_changed events are handled by flib via tags
 
 return ui

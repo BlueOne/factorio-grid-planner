@@ -14,7 +14,9 @@ local function handle_rect(event, erase)
   local surface_index = event.surface.index
   local region_id = nil
   if erase ~= true then region_id = ui.get_selected_region_id(player_index) end
-  backend.fill_rectangle(player_index, force_index, surface_index, region_id, event.area.left_top, event.area.right_bottom)
+  local layer = backend.get_active_layer(player_index, force_index, surface_index)
+  if not layer then return end
+  backend.fill_rectangle(player_index, force_index, surface_index, layer.id, region_id, event.area.left_top, event.area.right_bottom)
 end
 
 
